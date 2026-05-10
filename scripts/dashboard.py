@@ -11,6 +11,7 @@ import subprocess
 import time
 from pathlib import Path
 
+import markdown
 import yaml
 from flask import Flask, abort, jsonify, redirect, render_template_string, request
 
@@ -278,13 +279,113 @@ def status_payload():
 app = Flask(__name__)
 
 
-NAV = """<nav style="margin-bottom:1rem; font-size:.95rem">
-  <a href="/" style="margin-right:1rem; color:{home_color}; font-weight:{home_weight}; text-decoration:none">Source Intake</a>
-  <a href="/library" style="color:{lib_color}; font-weight:{lib_weight}; text-decoration:none">Library</a>
-</nav>"""
+FONT_LINK = """<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=Libre+Franklin:wght@400;500;600;700&display=swap" rel="stylesheet">"""
 
-NAV_HOME = NAV.format(home_color="#222", home_weight=600, lib_color="#1565c0", lib_weight=400)
-NAV_LIB = NAV.format(home_color="#1565c0", home_weight=400, lib_color="#222", lib_weight=600)
+
+SHARED_STYLES = """<style>
+:root {
+  --color-primary:        #002959;
+  --color-primary-hover:  #1E3A8A;
+  --color-primary-50:     #F0F4FA;
+  --color-accent:         #FFD200;
+  --color-accent-text:    #806800;
+  --color-accent-100:     #FFF9DB;
+  --color-text:           #2D3748;
+  --color-text-muted:     #4A5568;
+  --color-text-faint:     #697077;
+  --color-surface:        #FFFFFF;
+  --color-surface-alt:    #F5F6F7;
+  --color-surface-page:   #FAFAF7;
+  --color-border:         #E2E8F0;
+  --color-border-strong:  #CBD5E0;
+  --color-success-700:    #1B5E20;
+  --color-success-600:    #2E7D32;
+  --color-success-100:    #E8F5E9;
+  --color-error-700:      #B71C1C;
+  --color-error-600:      #C62828;
+  --color-error-100:      #FFEBEE;
+  --color-warning-700:    #BF360C;
+  --color-warning-600:    #E65100;
+  --color-warning-100:    #FFF3E0;
+  --font-ui:    'Libre Franklin', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-body:  'Libre Baskerville', Charter, Georgia, serif;
+  --font-mono:  'SF Mono', 'Cascadia Code', 'Fira Code', Consolas, 'Liberation Mono', monospace;
+  --space-1: 0.25rem; --space-2: 0.5rem; --space-3: 0.75rem; --space-4: 1rem;
+  --space-5: 1.25rem; --space-6: 1.5rem; --space-8: 2rem; --space-12: 3rem;
+  --radius-sm: 4px; --radius-md: 6px; --radius-lg: 8px;
+  --shadow-1: 0 1px 2px rgba(0,0,0,0.04), 0 1px 3px rgba(0,0,0,0.06);
+  --shadow-2: 0 2px 4px rgba(0,0,0,0.04), 0 4px 12px rgba(0,0,0,0.08);
+}
+* { box-sizing: border-box; }
+body { font-family: var(--font-ui); font-size: 14px; line-height: 1.5; background: var(--color-surface-page); color: var(--color-text); margin: 0; padding: var(--space-8); max-width: 1100px; margin-left: auto; margin-right: auto; -webkit-font-smoothing: antialiased; font-feature-settings: "kern", "liga"; }
+h1 { font-family: var(--font-ui); font-size: 1.75rem; font-weight: 600; letter-spacing: -0.015em; margin: 0 0 var(--space-2); color: var(--color-primary); }
+h2 { font-family: var(--font-ui); font-size: 0.78rem; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--color-text-faint); margin: var(--space-8) 0 var(--space-3); }
+a { color: var(--color-primary-hover); text-decoration: none; }
+a:hover { color: var(--color-primary); text-decoration: underline; }
+code, pre { font-family: var(--font-mono); }
+nav.topnav { display: flex; gap: var(--space-6); padding-bottom: var(--space-3); margin-bottom: var(--space-6); border-bottom: 1px solid var(--color-border); font-size: 0.9rem; }
+nav.topnav a { color: var(--color-text-muted); font-weight: 500; text-decoration: none; padding-bottom: var(--space-2); margin-bottom: -1px; }
+nav.topnav a:hover { color: var(--color-primary); text-decoration: none; }
+nav.topnav a.active { color: var(--color-primary); border-bottom: 2px solid var(--color-accent); }
+button, .btn { font: inherit; font-family: var(--font-ui); font-weight: 500; padding: var(--space-2) var(--space-4); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); cursor: pointer; color: var(--color-text); transition: background 100ms, border-color 100ms; }
+button:hover { background: var(--color-surface-alt); border-color: var(--color-border-strong); }
+button.primary { background: var(--color-primary); color: white; border-color: var(--color-primary); }
+button.primary:hover { background: var(--color-primary-hover); border-color: var(--color-primary-hover); }
+button.danger { color: var(--color-error-600); }
+button.danger:hover { color: var(--color-error-700); border-color: var(--color-error-600); background: var(--color-error-100); }
+form { margin: 0; display: inline; }
+input[type=search], input[type=text], textarea { font: inherit; font-family: var(--font-ui); padding: var(--space-3) var(--space-4); border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-surface); color: var(--color-text); }
+input[type=search]:focus, input[type=text]:focus, textarea:focus { outline: 2px solid var(--color-accent); outline-offset: -1px; border-color: var(--color-accent); }
+textarea { width: 100%; min-height: 14rem; font-family: var(--font-mono); font-size: 0.85rem; line-height: 1.5; }
+table { width: 100%; border-collapse: collapse; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); overflow: hidden; box-shadow: var(--shadow-1); }
+th, td { text-align: left; padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--color-border); vertical-align: top; }
+th { background: var(--color-primary-50); font-size: 0.74rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--color-text-faint); font-weight: 600; }
+tr:last-child td { border-bottom: none; }
+tr:hover td { background: rgba(0, 41, 89, 0.015); }
+td.actions { text-align: right; white-space: nowrap; }
+.badge { display: inline-block; padding: 0.15rem 0.55rem; border-radius: var(--radius-sm); font-size: 0.72rem; font-weight: 600; font-family: var(--font-ui); text-transform: uppercase; letter-spacing: 0.04em; }
+.badge.ok { background: var(--color-success-100); color: var(--color-success-700); }
+.badge.bad { background: var(--color-error-100); color: var(--color-error-700); }
+.badge.dup { background: var(--color-warning-100); color: var(--color-warning-700); }
+.dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; }
+.dot.ok { background: var(--color-success-600); }
+.dot.paused { background: var(--color-warning-600); }
+.dot.running { background: var(--color-success-600); animation: pulse 1.4s ease-in-out infinite; }
+@keyframes pulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(46,125,50,0.45); }
+  50%      { opacity: 0.6; box-shadow: 0 0 0 6px rgba(46,125,50,0); }
+}
+.strip { display: flex; align-items: center; gap: var(--space-4); padding: var(--space-4) var(--space-5); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-lg); box-shadow: var(--shadow-1); }
+.mute { color: var(--color-text-faint); font-size: 0.875rem; }
+.grow { flex: 1; }
+.empty { color: var(--color-text-faint); font-style: italic; padding: var(--space-4) var(--space-2); }
+.flash { padding: var(--space-3) var(--space-4); background: var(--color-accent-100); border: 1px solid #FFE69C; border-left: 3px solid var(--color-accent); border-radius: var(--radius-sm); margin-bottom: var(--space-4); font-size: 0.9rem; color: var(--color-text); }
+details summary { cursor: pointer; color: var(--color-primary-hover); font-size: 0.85rem; font-weight: 500; }
+details summary:hover { color: var(--color-primary); }
+details.settings { margin-top: var(--space-4); padding: var(--space-5); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-lg); box-shadow: var(--shadow-1); }
+details.settings summary { color: var(--color-text); font-weight: 600; font-size: 0.95rem; }
+pre { background: #1A202C; color: #E2E8F0; padding: var(--space-3) var(--space-4); border-radius: var(--radius-md); overflow-x: auto; font-size: 0.8rem; line-height: 1.5; max-height: 300px; }
+.livelog { background: #1A202C; color: #E2E8F0; font-family: var(--font-mono); font-size: 0.78rem; line-height: 1.55; padding: var(--space-3) var(--space-4); border-radius: var(--radius-md); max-height: 22rem; overflow-y: auto; border: 1px solid var(--color-border); }
+.livelog .ev { display: flex; gap: var(--space-2); padding: 0.2rem 0; border-bottom: 1px solid #2D3748; }
+.livelog .ev:last-child { border-bottom: none; }
+.livelog .ev .icon { width: 1.6rem; flex-shrink: 0; text-align: center; }
+.livelog .ev .text { white-space: pre-wrap; word-break: break-word; flex: 1; }
+.livelog .empty { padding: var(--space-2); opacity: 0.6; color: #A0AEC0; }
+ul.paths { margin: var(--space-1) 0; padding-left: var(--space-5); font-size: 0.85rem; color: var(--color-text-muted); }
+ul.paths code { font-size: 0.85rem; background: var(--color-surface-alt); padding: 0.1rem 0.3rem; border-radius: var(--radius-sm); }
+.cats { margin-top: var(--space-2); font-family: var(--font-mono); font-size: 0.85rem; color: var(--color-text-muted); }
+</style>"""
+
+
+def nav_html(active: str) -> str:
+    home_class = ' class="active"' if active == "home" else ""
+    lib_class = ' class="active"' if active == "library" else ""
+    return f"""<nav class="topnav">
+  <a href="/"{home_class}>Source Intake</a>
+  <a href="/library"{lib_class}>Library</a>
+</nav>"""
 
 
 TEMPLATE = """<!doctype html>
@@ -292,55 +393,8 @@ TEMPLATE = """<!doctype html>
 <head>
 <meta charset="utf-8">
 <title>Source Intake</title>
-<style>
-  :root { --bg:#fafaf7; --fg:#222; --mute:#666; --line:#ddd; --ok:#2e7d32; --bad:#c62828; --accent:#1565c0; }
-  body { font: 14px/1.45 -apple-system, system-ui, sans-serif; background: var(--bg); color: var(--fg); margin: 0; padding: 1.5rem 2rem; max-width: 1100px; }
-  h1 { font-size: 1.4rem; margin: 0 0 1rem; }
-  h2 { font-size: 1rem; margin: 1.5rem 0 .5rem; color: var(--mute); text-transform: uppercase; letter-spacing: .05em; font-weight: 600; }
-  .strip { display: flex; align-items: center; gap: 1rem; padding: .75rem 1rem; background: white; border: 1px solid var(--line); border-radius: 6px; }
-  .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; }
-  .dot.ok { background: var(--ok); }
-  .dot.paused { background: #ed8a00; }
-  .dot.running { background: var(--ok); animation: pulse 1.4s ease-in-out infinite; }
-  @keyframes pulse {
-    0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(46,125,50,.5); }
-    50% { opacity: .55; box-shadow: 0 0 0 6px rgba(46,125,50,0); }
-  }
-  button, .btn { font: inherit; padding: .35rem .75rem; background: white; border: 1px solid var(--line); border-radius: 4px; cursor: pointer; color: var(--fg); }
-  button:hover { background: #f0f0ec; }
-  button.primary { background: var(--accent); color: white; border-color: var(--accent); }
-  button.primary:hover { background: #0d4a91; }
-  button.danger { color: var(--bad); }
-  table { width: 100%; border-collapse: collapse; background: white; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
-  th, td { text-align: left; padding: .5rem .75rem; border-bottom: 1px solid var(--line); vertical-align: top; }
-  th { background: #f0f0ec; font-size: .85rem; color: var(--mute); font-weight: 600; }
-  tr:last-child td { border-bottom: none; }
-  td.actions { text-align: right; white-space: nowrap; }
-  .badge { display: inline-block; padding: .1rem .5rem; border-radius: 3px; font-size: .8rem; font-weight: 600; }
-  .badge.ok { background: #e8f5e9; color: var(--ok); }
-  .badge.bad { background: #ffebee; color: var(--bad); }
-  .badge.dup { background: #fff4e5; color: #c66800; }
-  .empty { color: var(--mute); font-style: italic; padding: .75rem; }
-  details { margin-top: .25rem; }
-  details summary { cursor: pointer; color: var(--accent); font-size: .85rem; }
-  pre { background: #1e1e1e; color: #ddd; padding: .75rem; border-radius: 4px; overflow-x: auto; font-size: .8rem; max-height: 300px; }
-  textarea { width: 100%; min-height: 14rem; font: 13px/1.4 ui-monospace, Menlo, monospace; padding: .75rem; border: 1px solid var(--line); border-radius: 4px; box-sizing: border-box; }
-  form { margin: 0; display: inline; }
-  .mute { color: var(--mute); font-size: .85rem; }
-  .grow { flex: 1; }
-  .flash { padding: .5rem .75rem; background: #fff3cd; border: 1px solid #ffe69c; border-radius: 4px; margin-bottom: 1rem; font-size: .9rem; }
-  ul.paths { margin: .25rem 0; padding-left: 1.25rem; font-size: .85rem; color: var(--mute); }
-  ul.paths code { font-size: .85rem; }
-  details.settings { margin-top: 1rem; padding: 1rem; background: white; border: 1px solid var(--line); border-radius: 6px; }
-  details.settings summary { color: var(--fg); font-weight: 600; }
-  .livelog { background: #1e1e1e; color: #d4d4d4; font: 12px/1.5 ui-monospace, Menlo, Monaco, monospace; padding: .5rem .75rem; border-radius: 6px; max-height: 22rem; overflow-y: auto; border: 1px solid var(--line); }
-  .livelog .ev { display: flex; gap: .5rem; padding: .15rem 0; border-bottom: 1px solid #2a2a2a; }
-  .livelog .ev:last-child { border-bottom: none; }
-  .livelog .ev .icon { width: 1.6rem; flex-shrink: 0; text-align: center; }
-  .livelog .ev .text { white-space: pre-wrap; word-break: break-word; flex: 1; }
-  .livelog .empty { padding: .5rem; opacity: .6; }
-  .cats { margin-top: .5rem; font-family: ui-monospace, Menlo, monospace; font-size: .85rem; color: var(--mute); }
-</style>
+{{ font_link | safe }}
+{{ shared_styles | safe }}
 </head>
 <body>
 {{ nav | safe }}
@@ -583,7 +637,9 @@ def index():
         inbox_path=str(INBOX),
         domain=os.environ.get("DOMAIN", "").strip(),
         flash=flash,
-        nav=NAV_HOME,
+        nav=nav_html("home"),
+        font_link=FONT_LINK,
+        shared_styles=SHARED_STYLES,
     )
 
 
@@ -597,32 +653,22 @@ LIBRARY_TEMPLATE = """<!doctype html>
 <head>
 <meta charset="utf-8">
 <title>Library</title>
+{{ font_link | safe }}
+{{ shared_styles | safe }}
 <style>
-  :root { --bg:#fafaf7; --fg:#222; --mute:#666; --line:#ddd; --accent:#1565c0; }
-  body { font: 14px/1.45 -apple-system, system-ui, sans-serif; background: var(--bg); color: var(--fg); margin: 0; padding: 1.5rem 2rem; max-width: 1300px; }
-  h1 { font-size: 1.4rem; margin: 0 0 1rem; }
-  h2 { font-size: 1rem; margin: 1.5rem 0 .5rem; color: var(--mute); text-transform: uppercase; letter-spacing: .05em; font-weight: 600; }
-  .controls { position: sticky; top: 0; background: var(--bg); padding-bottom: .5rem; z-index: 5; display: flex; gap: 1rem; align-items: center; }
-  .controls input[type=search] { font: inherit; padding: .5rem .75rem; border: 1px solid var(--line); border-radius: 6px; flex: 1; max-width: 30rem; background: white; }
-  .mute { color: var(--mute); font-size: .9rem; }
-  table { width: 100%; border-collapse: collapse; background: white; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
-  th, td { text-align: left; padding: .6rem .75rem; border-bottom: 1px solid var(--line); vertical-align: top; }
-  th { background: #f0f0ec; font-size: .85rem; color: var(--mute); font-weight: 600; }
-  tr:last-child td { border-bottom: none; }
-  td.actions { text-align: right; white-space: nowrap; }
-  .title { font-weight: 600; }
-  .title a { color: var(--fg); text-decoration: none; }
-  .title a:hover { color: var(--accent); }
-  .tldr { font-size: .9rem; line-height: 1.5; }
-  .meta { font-size: .85rem; color: var(--mute); margin-top: .25rem; }
-  .tags { margin-top: .35rem; display: flex; flex-wrap: wrap; gap: .3rem; }
-  .tag { display: inline-block; padding: .05rem .45rem; background: #eef3f8; color: #1d4d80; border-radius: 3px; font-size: .75rem; cursor: pointer; }
-  .tag:hover { background: #d6e4f1; }
-  button { font: inherit; padding: .25rem .6rem; background: white; border: 1px solid var(--line); border-radius: 4px; cursor: pointer; color: var(--fg); }
-  button:hover { background: #f0f0ec; }
-  .empty { color: var(--mute); font-style: italic; padding: 1rem; }
+  body { max-width: 1300px; }
+  .controls { position: sticky; top: 0; background: var(--color-surface-page); padding: var(--space-3) 0; z-index: 5; display: flex; gap: var(--space-4); align-items: center; border-bottom: 1px solid var(--color-border); margin-bottom: var(--space-4); }
+  .controls input[type=search] { flex: 1; max-width: 30rem; font-size: 0.95rem; }
+  .title { font-family: var(--font-ui); font-weight: 600; font-size: 1rem; line-height: 1.4; }
+  .title a { color: var(--color-text); text-decoration: none; }
+  .title a:hover { color: var(--color-primary); text-decoration: none; }
+  .tldr { font-size: 0.92rem; line-height: 1.55; color: var(--color-text-muted); font-family: var(--font-ui); }
+  .meta { font-size: 0.82rem; color: var(--color-text-faint); margin-top: 0.2rem; }
+  .tags { margin-top: var(--space-2); display: flex; flex-wrap: wrap; gap: 0.3rem; }
+  .tag { display: inline-block; padding: 0.1rem 0.5rem; background: var(--color-primary-50); color: var(--color-primary); border-radius: var(--radius-sm); font-size: 0.72rem; font-weight: 500; cursor: pointer; font-family: var(--font-ui); transition: background 100ms; }
+  .tag:hover { background: #DBE5F0; }
   .hidden { display: none !important; }
-  .nomatch { padding: 2rem; text-align: center; color: var(--mute); font-style: italic; }
+  .nomatch { padding: var(--space-12); text-align: center; color: var(--color-text-faint); font-style: italic; }
 </style>
 </head>
 <body>
@@ -647,14 +693,14 @@ LIBRARY_TEMPLATE = """<!doctype html>
       {% for s in by_cat[cat] %}
       <tr class="row" data-search="{{ (s.title ~ ' ' ~ s.tldr ~ ' ' ~ (s.authors|join(' ')) ~ ' ' ~ (s.tags|join(' ')) ~ ' ' ~ s.category)|lower }}">
         <td>
-          <div class="title"><a href="#" onclick="openSummary('{{ s.rel_path|e }}'); return false;">{{ s.title }}</a></div>
-          <div class="meta">{{ short_authors(s.authors) }}{% if s.url %} · <a href="{{ s.url }}" target="_blank" rel="noopener" style="color:var(--mute)">source ↗</a>{% endif %}</div>
+          <div class="title"><a href="/source/{{ s.rel_path|urlencode }}">{{ s.title }}</a></div>
+          <div class="meta">{{ short_authors(s.authors) }}{% if s.url %} · <a href="{{ s.url }}" target="_blank" rel="noopener" style="color:var(--color-text-faint)">source ↗</a>{% endif %}</div>
           <div class="tags">{% for t in s.tags %}<span class="tag" onclick="setFilter('{{ t|e }}')">{{ t }}</span>{% endfor %}</div>
         </td>
         <td class="tldr">{{ s.tldr or '—' }}</td>
         <td class="mute">{{ s.year or '—' }}</td>
         <td class="actions">
-          <button onclick="openSummary('{{ s.rel_path|e }}')">Open</button>
+          <a href="/source/{{ s.rel_path|urlencode }}" class="btn">View</a>
         </td>
       </tr>
       {% endfor %}
@@ -700,14 +746,6 @@ function applyFilter() {
 }
 filterEl.addEventListener('input', applyFilter);
 function setFilter(v) { filterEl.value = v; applyFilter(); filterEl.focus(); }
-
-async function openSummary(path) {
-  try {
-    const fd = new FormData();
-    fd.append('path', path);
-    await fetch('/api/open', { method: 'POST', body: fd });
-  } catch (e) { /* no-op */ }
-}
 </script>
 </body>
 </html>"""
@@ -734,7 +772,127 @@ def library_view():
         total=sum(len(v) for v in by_cat.values()),
         short_authors=short_authors,
         domain=os.environ.get("DOMAIN", "").strip(),
-        nav=NAV_LIB,
+        nav=nav_html("library"),
+        font_link=FONT_LINK,
+        shared_styles=SHARED_STYLES,
+    )
+
+
+SOURCE_TEMPLATE = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{{ fm.title or rel_path }}</title>
+{{ font_link | safe }}
+{{ shared_styles | safe }}
+<style>
+  body { max-width: 780px; padding-top: var(--space-6); padding-bottom: var(--space-12); }
+  .back-link { display: inline-block; margin-bottom: var(--space-4); font-family: var(--font-ui); font-size: 0.85rem; color: var(--color-text-muted); }
+  .back-link:hover { color: var(--color-primary); }
+  .viewer-header { margin-bottom: var(--space-6); padding-bottom: var(--space-4); border-bottom: 1px solid var(--color-border); }
+  .viewer-eyebrow { font-family: var(--font-ui); font-size: 0.78rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--color-accent-text); margin-bottom: var(--space-3); }
+  h1.viewer-title { font-family: var(--font-body); font-weight: 700; font-size: 2rem; line-height: 1.2; margin: 0 0 var(--space-3); color: var(--color-text); letter-spacing: -0.01em; }
+  .viewer-meta { font-family: var(--font-ui); color: var(--color-text-faint); font-size: 0.9rem; margin-top: var(--space-3); }
+  .viewer-meta a { color: var(--color-primary-hover); }
+  .viewer-tags { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-top: var(--space-3); }
+  .viewer-tags .tag { display: inline-block; padding: 0.1rem 0.5rem; background: var(--color-primary-50); color: var(--color-primary); border-radius: var(--radius-sm); font-size: 0.72rem; font-weight: 500; font-family: var(--font-ui); }
+  .viewer-tldr { font-family: var(--font-body); font-size: 1.08rem; line-height: 1.6; font-style: italic; padding: var(--space-4) var(--space-6); margin: var(--space-6) 0; background: var(--color-accent-100); border-left: 4px solid var(--color-accent); border-radius: var(--radius-sm); color: var(--color-text); }
+  .prose { font-family: var(--font-body); font-size: 1rem; line-height: 1.7; color: var(--color-text); }
+  .prose h1, .prose h2, .prose h3, .prose h4 { font-family: var(--font-ui); color: var(--color-primary); font-weight: 600; letter-spacing: -0.005em; line-height: 1.3; text-transform: none; margin-top: var(--space-8); margin-bottom: var(--space-3); }
+  .prose h2 { font-size: 1.35rem; padding-bottom: var(--space-1); border-bottom: 1px solid var(--color-border); }
+  .prose h3 { font-size: 1.1rem; }
+  .prose h4 { font-size: 1rem; color: var(--color-text); }
+  .prose p { margin: 0 0 var(--space-4); }
+  .prose ul, .prose ol { padding-left: var(--space-6); margin: 0 0 var(--space-4); }
+  .prose li { margin-bottom: var(--space-2); }
+  .prose strong { color: var(--color-text); font-weight: 700; }
+  .prose em { font-style: italic; }
+  .prose code { font-family: var(--font-mono); font-size: 0.9em; background: var(--color-surface-alt); padding: 0.1rem 0.35rem; border-radius: var(--radius-sm); color: var(--color-text); }
+  .prose pre { background: var(--color-surface-alt); color: var(--color-text); padding: var(--space-3) var(--space-4); border: 1px solid var(--color-border); border-radius: var(--radius-md); font-size: 0.85rem; max-height: none; }
+  .prose blockquote { border-left: 3px solid var(--color-border-strong); margin: var(--space-4) 0; padding: var(--space-1) var(--space-5); color: var(--color-text-muted); font-style: italic; }
+  .prose hr { border: none; border-top: 1px solid var(--color-border); margin: var(--space-6) 0; }
+  .prose table { box-shadow: none; }
+  .viewer-footer { margin-top: var(--space-12); padding-top: var(--space-4); border-top: 1px solid var(--color-border); font-family: var(--font-ui); font-size: 0.8rem; color: var(--color-text-faint); display: flex; gap: var(--space-4); align-items: center; flex-wrap: wrap; }
+  .viewer-footer code { font-size: 0.75rem; }
+  .viewer-footer .grow { flex: 1; }
+</style>
+</head>
+<body>
+{{ nav | safe }}
+<a class="back-link" href="/library">← Back to Library</a>
+
+<div class="viewer-header">
+  {% if fm.category %}<div class="viewer-eyebrow">{{ fm.category }}{% if fm.source_type %} · {{ fm.source_type }}{% endif %}</div>{% endif %}
+  <h1 class="viewer-title">{{ fm.title or rel_path }}</h1>
+  <div class="viewer-meta">
+    {% if authors_short %}{{ authors_short }}{% endif %}
+    {% if fm.date %} · {{ fm.date }}{% endif %}
+    {% if fm.publication %} · <span style="font-style:italic">{{ fm.publication }}</span>{% endif %}
+    {% if fm.url %} · <a href="{{ fm.url }}" target="_blank" rel="noopener">source ↗</a>{% endif %}
+  </div>
+  {% if fm.tags %}
+  <div class="viewer-tags">{% for t in fm.tags %}<span class="tag">{{ t }}</span>{% endfor %}</div>
+  {% endif %}
+</div>
+
+{% if fm.tldr %}<div class="viewer-tldr">{{ fm.tldr }}</div>{% endif %}
+
+<div class="prose">
+{{ body_html | safe }}
+</div>
+
+<div class="viewer-footer">
+  <span><code>{{ rel_path }}</code></span>
+  <span class="grow"></span>
+  <form method="post" action="/api/open"><input type="hidden" name="path" value="{{ rel_path }}"><button type="submit">Open externally</button></form>
+</div>
+</body>
+</html>"""
+
+
+def render_markdown(body: str) -> str:
+    md = markdown.Markdown(extensions=["extra", "sane_lists", "smarty"], output_format="html5")
+    return md.convert(body)
+
+
+@app.route("/source/<path:rel>")
+def view_source(rel):
+    if ".." in rel.split("/") or rel.startswith("/"):
+        abort(400, "invalid path")
+    target = (LIBRARY / rel).resolve()
+    try:
+        target.relative_to(LIBRARY.resolve())
+    except ValueError:
+        abort(400, "outside library")
+    if not target.exists() or not target.is_file():
+        abort(404)
+    if target.suffix != ".md":
+        abort(400, "only markdown sources are viewable")
+    text = target.read_text()
+    fm = {}
+    body = text
+    if text.startswith("---\n"):
+        end = text.find("\n---\n", 4)
+        if end != -1:
+            try:
+                fm = yaml.safe_load(text[4:end]) or {}
+            except yaml.YAMLError:
+                fm = {}
+            body = text[end + 5:]
+    if not isinstance(fm, dict):
+        fm = {}
+    authors = fm.get("authors") or []
+    if isinstance(authors, str):
+        authors = [authors]
+    return render_template_string(
+        SOURCE_TEMPLATE,
+        fm=fm,
+        body_html=render_markdown(body),
+        authors_short=short_authors(authors),
+        rel_path=rel,
+        nav=nav_html("library"),
+        font_link=FONT_LINK,
+        shared_styles=SHARED_STYLES,
     )
 
 
