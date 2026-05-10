@@ -242,9 +242,10 @@ EOF
   start_ts=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 
   prompt=$("$PYTHON" -c '
-import sys
+import os, sys
 template = open(sys.argv[1]).read()
-print(template.replace("<STAGED_PATH>", sys.argv[2]), end="")
+domain = os.environ.get("DOMAIN", "A general-purpose personal research library.")
+print(template.replace("<STAGED_PATH>", sys.argv[2]).replace("<DOMAIN>", domain), end="")
 ' "$PROMPT_FILE" "$staged_path")
 
   set +e

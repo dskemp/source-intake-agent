@@ -24,6 +24,8 @@ Configuration (lowest to highest precedence):
   2. .env at the repo root (gitignored — put your real paths here)
   3. Environment variables passed on the command line
 
+  DOMAIN="..."                         description of the library's domain
+                                       (used as claude context — be specific)
   LIBRARY=~/source-library             library root
   INBOX=~/source-library-inbox         watched folder
   LABEL_PREFIX=com.user                plist label prefix
@@ -51,6 +53,7 @@ INBOX="${INBOX:-$HOME/source-library-inbox}"
 LABEL_PREFIX="${LABEL_PREFIX:-com.user}"
 CLAUDE_BIN="${CLAUDE_BIN:-$(command -v claude || true)}"
 CATEGORY_ORDER="${CATEGORY_ORDER:-}"
+DOMAIN="${DOMAIN:-A general-purpose personal research library.}"
 
 # Expand leading "~/" since shell parameter expansion doesn't.
 expand_tilde() { printf '%s' "${1/#\~\//$HOME/}"; }
@@ -77,6 +80,7 @@ say "claude:    $CLAUDE_BIN"
 say "library:   $LIBRARY"
 say "inbox:     $INBOX"
 say "labels:    ${LABEL_PREFIX}.*"
+say "domain:    $DOMAIN"
 say "mode:      $([[ $LINK_MODE == 1 ]] && echo 'symlink (single source of truth)' || echo 'copy')"
 
 # --- Directories --------------------------------------------------------------
@@ -122,12 +126,16 @@ fi
 # --- Render plists ------------------------------------------------------------
 render_plist() {
   local src="$1" dest="$2"
+  # DOMAIN is free text — escape sed-special chars, collapse newlines.
+  local domain_esc
+  domain_esc=$(printf '%s' "$DOMAIN" | tr '\n' ' ' | sed -e 's/[\\&|]/\\&/g')
   sed -e "s|__HOME__|${HOME}|g" \
       -e "s|__LIBRARY__|${LIBRARY}|g" \
       -e "s|__INBOX__|${INBOX}|g" \
       -e "s|__CLAUDE__|${CLAUDE_BIN}|g" \
       -e "s|__LABEL_PREFIX__|${LABEL_PREFIX}|g" \
       -e "s|__CATEGORY_ORDER__|${CATEGORY_ORDER}|g" \
+      -e "s|__DOMAIN__|${domain_esc}|g" \
       "$src" > "$dest"
   plutil -lint "$dest" >/dev/null
 }

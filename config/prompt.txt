@@ -1,6 +1,15 @@
-Process <STAGED_PATH> headlessly via the source-intake skill.
+You are processing sources for a library focused on:
 
-Make all judgment calls yourself; do NOT ask clarifying questions.
+  <DOMAIN>
+
+Use that domain context to inform: which existing category folder fits
+best, what tags are useful, the level of technical detail in the summary,
+and the section framing (e.g., "Key Claims" vs "Main Argument" vs "Recipe
+Steps" — pick what's natural for this domain). When no existing category
+folder fits, propose a new one whose name fits the domain's vocabulary.
+
+Process <STAGED_PATH> headlessly via the source-intake skill. Make all
+judgment calls yourself; do NOT ask clarifying questions.
 
 Input format:
   .pdf            primary document
@@ -9,18 +18,11 @@ Input format:
 
 Frontmatter must include `tldr: "..."` — one sentence (~25 words), stands
 alone without context. Set `source_type:` accurately so the skill adapts
-its sections:
+its sections (e.g., omit Methodology for non-empirical sources).
 
-  paper, report, book-chapter   scholarly — include Methodology
-  article                        news, magazine, blog post — no Methodology
-  opinion                        editorial / commentary — frame "Key Claims"
-                                 as the author's main argument
-  documentation                  technical docs / API reference
-
-Choose an existing category folder over proposing a new one. For the
-Relevance section, infer 2-4 hedged connections from the existing library
-(use "plausibly relevant to..."). If you can't infer one, write a single
-sentence on likely use case.
+For the Relevance section: 2-4 hedged connections to topics the existing
+library covers ("plausibly relevant to..."). If you can't infer one,
+write a single sentence on likely use case.
 
 Scope — IMPORTANT:
 - Create only the new source's folder and files.

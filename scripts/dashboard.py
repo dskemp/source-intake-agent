@@ -345,6 +345,7 @@ TEMPLATE = """<!doctype html>
 <body>
 {{ nav | safe }}
 <h1>Source Intake</h1>
+{% if domain %}<p class="mute" style="margin-top:-.6rem; margin-bottom:1rem">{{ domain }}</p>{% endif %}
 
 {% if flash %}<div class="flash">{{ flash }}</div>{% endif %}
 
@@ -580,6 +581,7 @@ def index():
         prompt=prompt,
         prompt_path=str(PROMPT_FILE),
         inbox_path=str(INBOX),
+        domain=os.environ.get("DOMAIN", "").strip(),
         flash=flash,
         nav=NAV_HOME,
     )
@@ -626,6 +628,7 @@ LIBRARY_TEMPLATE = """<!doctype html>
 <body>
 {{ nav | safe }}
 <h1>Library <span class="mute" style="font-weight:400; font-size:.95rem">— {{ total }} sources across {{ by_cat|length }} {{ 'category' if by_cat|length == 1 else 'categories' }}</span></h1>
+{% if domain %}<p class="mute" style="margin-top:-.6rem; margin-bottom:1rem">{{ domain }}</p>{% endif %}
 
 <div class="controls">
   <input id="filter" type="search" placeholder="Filter by title, tldr, author, tag, category…" autofocus>
@@ -730,6 +733,7 @@ def library_view():
         empty=empty,
         total=sum(len(v) for v in by_cat.values()),
         short_authors=short_authors,
+        domain=os.environ.get("DOMAIN", "").strip(),
         nav=NAV_LIB,
     )
 

@@ -29,6 +29,8 @@
         <string>__INBOX__</string>
         <key>CATEGORY_ORDER</key>
         <string>__CATEGORY_ORDER__</string>
+        <key>DOMAIN</key>
+        <string>__DOMAIN__</string>
     </dict>
 </dict>
 </plist>

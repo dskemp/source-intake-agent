@@ -2,18 +2,21 @@
 
 A macOS automation that watches a folder, runs Claude Code's `source-intake`
 skill on each dropped file in headless mode, and files the resulting summary
-into a personal research library — no human in the loop.
+into a personal research library — no human in the loop. Domain-agnostic:
+configure it once with a description of what your library covers (legal AI
+papers, cooking recipes, tech-industry news, climate policy, etc.) and the
+LLM adapts category choices, tagging, section framing, and tone to fit.
 
 Drop a PDF (or a `.txt` containing a URL, or a saved `.md`/`.html` snapshot)
 into your inbox folder → wait → it shows up in
-`<library>/<category>/<author-year-slug>/` with a structured `.summary.md`,
+`<library>/<category>/<slug>/` with a structured `.summary.md`,
 the index regenerates, and the input file is removed. Failures land in
-`_failed/` with a log sidecar.
+`_failed/` with a log sidecar; duplicates land in `_duplicate/`.
 
-> **You choose where the library and inbox live.** Defaults are
-> `~/source-library` and `~/source-library-inbox`, but you'll almost certainly
-> want to override them — either with a local `.env` (gitignored) or via env
-> vars on the install command. See **Configure** below.
+> **You choose where the library and inbox live, and what they're for.**
+> Defaults are `~/source-library`, `~/source-library-inbox`, and a generic
+> domain — but you'll almost certainly want to override them via a local
+> `.env` (gitignored). See **Configure** below.
 
 ## Architecture
 
@@ -93,6 +96,7 @@ Configuration is layered — later sources override earlier ones:
 
 | Var              | Default                       | Purpose                                       |
 | ---------------- | ----------------------------- | --------------------------------------------- |
+| `DOMAIN`         | *generic library*             | Free-text description of the library's domain |
 | `LIBRARY`        | `~/source-library`            | Where summaries are filed                     |
 | `INBOX`          | `~/source-library-inbox`      | Watched folder                                |
 | `LABEL_PREFIX`   | `com.user`                    | Reverse-DNS prefix for plist labels           |
@@ -104,12 +108,41 @@ so they never leak into commit history.
 
 ```sh
 cat > .env <<'EOF'
+DOMAIN="AI/LLM research papers and policy reports."
 LIBRARY=~/path/to/your/library
 INBOX=~/path/to/your/inbox
 LABEL_PREFIX=com.your-handle
 EOF
 ./install.sh --link
 ```
+
+### Domain customization
+
+The `DOMAIN` field is the single most important setting after paths. It's
+free text — a sentence or two describing what kind of sources this library
+collects. The worker substitutes it into the autonomy prompt at run time so
+claude has appropriate context for category choices, tag vocabulary, section
+framing, and tone.
+
+A specific domain produces a more useful library. Examples:
+
+| Domain | Effect on intake |
+|---|---|
+| `"AI/LLM research papers and policy reports."` | Scholarly framing — Methodology sections, formal citations, technical tags |
+| `"Recipes from cookbooks, blogs, and magazines for home cooks."` | Sections like ingredients, technique notes, dietary tags; no Methodology |
+| `"Tech industry news articles and analyst reports from 2024 onward."` | Article framing — main argument, key takeaways, source-credibility note |
+| `"Climate policy briefings and academic papers on energy transition."` | Mixed scholarly/policy — adapts per source |
+| `"Personal reading notes from non-fiction across the humanities."` | Looser, more interpretive; chapter-level categories |
+
+The taxonomy (category folders) **emerges organically** as you add sources —
+claude picks an appropriate category for each one, creating a new folder
+when no existing one fits. After a handful of intakes you'll see your
+domain's natural categories take shape. If you want a head start, create a
+few empty category folders manually before processing your first file.
+
+You can change `DOMAIN` later by editing `.env` and re-running `./install.sh`
+(re-renders the launchd plist with the new value); the change applies on the
+next file drop.
 
 `install.sh` is idempotent — re-running it refreshes the deployed scripts and
 reloads the launchd agents without touching your API key, run history, or
