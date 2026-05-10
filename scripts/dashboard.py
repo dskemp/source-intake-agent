@@ -101,15 +101,28 @@ def recent_runs(limit=20):
     if not RUNS_LOG.exists():
         return []
     lines = RUNS_LOG.read_text().splitlines()
+    library_resolved = LIBRARY.resolve() if LIBRARY.exists() else None
     out = []
     for line in lines[-limit:]:
         line = line.strip()
         if not line:
             continue
         try:
-            out.append(json.loads(line))
+            entry = json.loads(line)
         except json.JSONDecodeError:
             continue
+        rel_paths = []
+        for p in entry.get("output_paths") or []:
+            if library_resolved:
+                try:
+                    rel = Path(p).resolve().relative_to(library_resolved).as_posix()
+                    rel_paths.append(rel)
+                    continue
+                except (ValueError, OSError):
+                    pass
+            rel_paths.append(p)
+        entry["output_paths_relative"] = rel_paths
+        out.append(entry)
     out.reverse()
     return out
 
@@ -373,8 +386,11 @@ pre { background: #1A202C; color: #E2E8F0; padding: var(--space-3) var(--space-4
 .livelog .ev .icon { width: 1.6rem; flex-shrink: 0; text-align: center; }
 .livelog .ev .text { white-space: pre-wrap; word-break: break-word; flex: 1; }
 .livelog .empty { padding: var(--space-2); opacity: 0.6; color: #A0AEC0; }
-ul.paths { margin: var(--space-1) 0; padding-left: var(--space-5); font-size: 0.85rem; color: var(--color-text-muted); }
-ul.paths code { font-size: 0.85rem; background: var(--color-surface-alt); padding: 0.1rem 0.3rem; border-radius: var(--radius-sm); }
+.paths { font-size: 0.85rem; color: var(--color-text-muted); }
+.paths > div { padding: 0.1rem 0; }
+.paths code { font-size: 0.85rem; background: var(--color-surface-alt); padding: 0.1rem 0.35rem; border-radius: var(--radius-sm); color: var(--color-text-muted); }
+.paths a { color: var(--color-primary-hover); text-decoration: none; }
+.paths a:hover code { background: var(--color-primary-50); color: var(--color-primary); }
 .cats { margin-top: var(--space-2); font-family: var(--font-mono); font-size: 0.85rem; color: var(--color-text-muted); }
 </style>"""
 
@@ -463,8 +479,10 @@ TEMPLATE = """<!doctype html>
       <td class="mute">{% if r.cost_usd %}${{ '%.3f'|format(r.cost_usd) }}{% else %}—{% endif %}</td>
       <td class="mute">{% if r.duration_ms %}{{ '%.1f'|format(r.duration_ms / 1000) }}s{% else %}—{% endif %}</td>
       <td>
-        {% if r.output_paths %}
-          <ul class="paths">{% for p in r.output_paths %}<li><code>{{ p }}</code></li>{% endfor %}</ul>
+        {% if r.output_paths_relative %}
+          <div class="paths">
+            {% for p in r.output_paths_relative %}<div><a href="/source/{{ p|urlencode }}"><code>{{ p }}</code></a></div>{% endfor %}
+          </div>
         {% endif %}
         {% if r.error_excerpt %}
           <details><summary>error log</summary><pre>{{ r.error_excerpt }}</pre></details>
