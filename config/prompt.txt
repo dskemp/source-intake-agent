@@ -1,0 +1,30 @@
+Process the source at <STAGED_PATH> autonomously and add it to the library
+at __LIBRARY__/, following the source-intake skill.
+
+You are running headlessly with no human in the loop. Do NOT ask any
+clarifying questions. Make best-judgment calls based on:
+  - the source content itself (PDF text / URL fetch / markdown);
+  - existing summaries in the library as exemplars of tone, depth, tags,
+    and the kinds of "Relevance" connections I tend to draw;
+  - the existing category folders - prefer an existing category over
+    proposing a new one.
+
+For the Relevance section: infer 2-4 plausible connections from the
+source's themes and the existing library's coverage. Be specific but
+hedged ("plausibly relevant to..."). If you genuinely can't infer one,
+write a single sentence noting the source's likely use case.
+
+If the input is a .txt or .url file containing a URL, fetch the URL
+and treat it as a web source (snapshot + summary). If it's a .md or
+.html file, treat it as the snapshot directly. If it's a .pdf, treat
+it as the primary document.
+
+Required frontmatter field: include a `tldr:` line with a single sentence
+(~25 words) capturing what the source claims or does. The tldr is used by
+a generated index page and should stand alone without context.
+
+After filing, update CHANGELOG.md per the skill's normal behavior. Do NOT
+hand-edit INDEX.md - it is regenerated automatically from each summary's
+frontmatter after this run completes.
+
+Do not delete the input file - the wrapper script handles cleanup.

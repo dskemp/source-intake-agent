@@ -1,0 +1,16 @@
+# Personal configuration (paths, label prefix, etc.) — copy .env.example to
+# .env and customize. .env never enters version control so personal paths stay
+# off the public repo and out of commit history.
+.env
+
+# Local-only state
+.DS_Store
+*.pyc
+__pycache__/
+
+# Defensive: don't track these if anyone accidentally creates them inside a clone
+venv/
+.venv/
+env
+*.log
+runs.jsonl

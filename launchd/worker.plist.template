@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>__LABEL_PREFIX__.claude-source-intake</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>__HOME__/Library/Scripts/claude-source-intake.sh</string>
+    </array>
+    <key>WatchPaths</key>
+    <array>
+        <string>__INBOX__</string>
+    </array>
+    <key>RunAtLoad</key>
+    <false/>
+    <key>ThrottleInterval</key>
+    <integer>2</integer>
+    <key>StandardOutPath</key>
+    <string>/tmp/claude-source-intake.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/claude-source-intake.err.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>__HOME__/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>__HOME__</string>
+        <key>LIBRARY_PATH</key>
+        <string>__LIBRARY__</string>
+        <key>INBOX_PATH</key>
+        <string>__INBOX__</string>
+        <key>CLAUDE_BIN</key>
+        <string>__CLAUDE__</string>
+        <key>CATEGORY_ORDER</key>
+        <string>__CATEGORY_ORDER__</string>
+    </dict>
+</dict>
+</plist>
