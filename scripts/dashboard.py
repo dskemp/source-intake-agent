@@ -13,7 +13,7 @@ from pathlib import Path
 
 import markdown
 import yaml
-from flask import Flask, abort, jsonify, redirect, render_template_string, request
+from flask import Flask, abort, jsonify, redirect, render_template_string, request, send_file
 
 HOME = Path.home()
 INBOX = Path(os.environ.get("INBOX_PATH") or (HOME / "source-library-inbox"))
@@ -181,10 +181,28 @@ def collect_library_sources():
             "url": fm.get("url") or "",
             "rel_path": rel_path,
             "category": category,
+            "source_file": find_source_file(summary),
         })
     for sources in by_cat.values():
         sources.sort(key=lambda s: (s["date"], s["title"]), reverse=True)
     return by_cat
+
+
+def find_source_file(summary: Path):
+    """Return sibling .pdf or .snapshot.md as a dict, or None."""
+    name = summary.name
+    if not name.endswith(".summary.md"):
+        return None
+    slug = name[: -len(".summary.md")]
+    for ext, kind in ((".pdf", "pdf"), (".snapshot.md", "snapshot")):
+        candidate = summary.parent / f"{slug}{ext}"
+        if candidate.exists():
+            try:
+                rel = candidate.resolve().relative_to(LIBRARY.resolve()).as_posix()
+            except (ValueError, OSError):
+                rel = candidate.as_posix()
+            return {"rel_path": rel, "kind": kind}
+    return None
 
 
 def short_authors(authors, max_shown=3):
@@ -712,7 +730,11 @@ LIBRARY_TEMPLATE = """<!doctype html>
       <tr class="row" data-search="{{ (s.title ~ ' ' ~ s.tldr ~ ' ' ~ (s.authors|join(' ')) ~ ' ' ~ (s.tags|join(' ')) ~ ' ' ~ s.category)|lower }}">
         <td>
           <div class="title"><a href="/source/{{ s.rel_path|urlencode }}">{{ s.title }}</a></div>
-          <div class="meta">{{ short_authors(s.authors) }}{% if s.url %} · <a href="{{ s.url }}" target="_blank" rel="noopener" style="color:var(--color-text-faint)">source ↗</a>{% endif %}</div>
+          <div class="meta">
+            {{ short_authors(s.authors) }}
+            {% if s.url %} · <a href="{{ s.url }}" target="_blank" rel="noopener" style="color:var(--color-text-faint)">url ↗</a>{% endif %}
+            {% if s.source_file %} · <a href="/file/{{ s.source_file.rel_path|urlencode }}" target="_blank" rel="noopener" style="color:var(--color-text-faint)">{{ s.source_file.kind }} ↗</a>{% endif %}
+          </div>
           <div class="tags">{% for t in s.tags %}<span class="tag" onclick="setFilter('{{ t|e }}')">{{ t }}</span>{% endfor %}</div>
         </td>
         <td class="tldr">{{ s.tldr or '—' }}</td>
@@ -846,7 +868,8 @@ SOURCE_TEMPLATE = """<!doctype html>
     {% if authors_short %}{{ authors_short }}{% endif %}
     {% if fm.date %} · {{ fm.date }}{% endif %}
     {% if fm.publication %} · <span style="font-style:italic">{{ fm.publication }}</span>{% endif %}
-    {% if fm.url %} · <a href="{{ fm.url }}" target="_blank" rel="noopener">source ↗</a>{% endif %}
+    {% if fm.url %} · <a href="{{ fm.url }}" target="_blank" rel="noopener">url ↗</a>{% endif %}
+    {% if source_file %} · <a href="/file/{{ source_file.rel_path|urlencode }}" target="_blank" rel="noopener">view {{ source_file.kind }} ↗</a>{% endif %}
   </div>
   {% if fm.tags %}
   <div class="viewer-tags">{% for t in fm.tags %}<span class="tag">{{ t }}</span>{% endfor %}</div>
@@ -902,16 +925,38 @@ def view_source(rel):
     authors = fm.get("authors") or []
     if isinstance(authors, str):
         authors = [authors]
+    source_file = find_source_file(target) if target.name.endswith(".summary.md") else None
     return render_template_string(
         SOURCE_TEMPLATE,
         fm=fm,
         body_html=render_markdown(body),
         authors_short=short_authors(authors),
         rel_path=rel,
+        source_file=source_file,
         nav=nav_html("library"),
         font_link=FONT_LINK,
         shared_styles=SHARED_STYLES,
     )
+
+
+SERVABLE_EXTS = {".pdf", ".md", ".html", ".htm", ".txt", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"}
+
+
+@app.route("/file/<path:rel>")
+def serve_file(rel):
+    """Serve a file inside the library inline (PDFs render natively in modern browsers)."""
+    if not rel or ".." in rel.split("/") or rel.startswith("/"):
+        abort(400, "invalid path")
+    target = (LIBRARY / rel).resolve()
+    try:
+        target.relative_to(LIBRARY.resolve())
+    except ValueError:
+        abort(400, "outside library")
+    if not target.exists() or not target.is_file():
+        abort(404)
+    if target.suffix.lower() not in SERVABLE_EXTS:
+        abort(415, "file type not served")
+    return send_file(str(target))
 
 
 @app.route("/api/open", methods=["POST"])
