@@ -1,30 +1,31 @@
-Process the source at <STAGED_PATH> autonomously and add it to the library
-at __LIBRARY__/, following the source-intake skill.
+Process <STAGED_PATH> headlessly via the source-intake skill.
 
-You are running headlessly with no human in the loop. Do NOT ask any
-clarifying questions. Make best-judgment calls based on:
-  - the source content itself (PDF text / URL fetch / markdown);
-  - existing summaries in the library as exemplars of tone, depth, tags,
-    and the kinds of "Relevance" connections I tend to draw;
-  - the existing category folders - prefer an existing category over
-    proposing a new one.
+Make all judgment calls yourself; do NOT ask clarifying questions.
 
-For the Relevance section: infer 2-4 plausible connections from the
-source's themes and the existing library's coverage. Be specific but
-hedged ("plausibly relevant to..."). If you genuinely can't infer one,
-write a single sentence noting the source's likely use case.
+Input format:
+  .pdf            primary document
+  .md / .html     treat as the snapshot
+  .txt / .url     fetch the contained URL as a web source
 
-If the input is a .txt or .url file containing a URL, fetch the URL
-and treat it as a web source (snapshot + summary). If it's a .md or
-.html file, treat it as the snapshot directly. If it's a .pdf, treat
-it as the primary document.
+Frontmatter must include `tldr: "..."` — one sentence (~25 words), stands
+alone without context. Set `source_type:` accurately so the skill adapts
+its sections:
 
-Required frontmatter field: include a `tldr:` line with a single sentence
-(~25 words) capturing what the source claims or does. The tldr is used by
-a generated index page and should stand alone without context.
+  paper, report, book-chapter   scholarly — include Methodology
+  article                        news, magazine, blog post — no Methodology
+  opinion                        editorial / commentary — frame "Key Claims"
+                                 as the author's main argument
+  documentation                  technical docs / API reference
 
-After filing, update CHANGELOG.md per the skill's normal behavior. Do NOT
-hand-edit INDEX.md - it is regenerated automatically from each summary's
-frontmatter after this run completes.
+Choose an existing category folder over proposing a new one. For the
+Relevance section, infer 2-4 hedged connections from the existing library
+(use "plausibly relevant to..."). If you can't infer one, write a single
+sentence on likely use case.
 
-Do not delete the input file - the wrapper script handles cleanup.
+Scope — IMPORTANT:
+- Create only the new source's folder and files.
+- Do NOT edit any existing summary files for any reason (no tag
+  normalization, no currency_check refresh, no cross-references).
+- Do NOT touch INDEX.md (the wrapper regenerates it from frontmatter).
+- Do NOT update or create CHANGELOG.md.
+- Do NOT delete the input file (the wrapper handles cleanup).

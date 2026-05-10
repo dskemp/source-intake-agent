@@ -26,32 +26,9 @@ if [[ -f "$ENV_FILE" ]]; then
 fi
 
 if [[ ! -f "$PROMPT_FILE" ]]; then
-  cat > "$PROMPT_FILE" <<PROMPT_EOF
-Process the source at <STAGED_PATH> autonomously and add it to the library
-at $LIBRARY/, following the source-intake skill.
-
-You are running headlessly with no human in the loop. Do NOT ask any
-clarifying questions. Make best-judgment calls based on:
-  - the source content itself (PDF text / URL fetch / markdown);
-  - existing summaries in the library as exemplars of tone, depth, tags,
-    and the kinds of "Relevance" connections I tend to draw;
-  - the existing category folders - prefer an existing category over
-    proposing a new one.
-
-For the Relevance section: infer 2-4 plausible connections from the
-source's themes and the existing library's coverage. Be specific but
-hedged ("plausibly relevant to..."). If you genuinely can't infer one,
-write a single sentence noting the source's likely use case.
-
-If the input is a .txt or .url file containing a URL, fetch the URL
-and treat it as a web source (snapshot + summary). If it's a .md or
-.html file, treat it as the snapshot directly. If it's a .pdf, treat
-it as the primary document.
-
-After filing, also update INDEX.md and CHANGELOG.md per the skill's
-normal behavior. Do not delete the input file - the wrapper script
-handles cleanup.
-PROMPT_EOF
+  echo "ERROR: prompt file missing at $PROMPT_FILE" >&2
+  echo "Run install.sh from the source-intake-agent repo to restore it." >&2
+  exit 1
 fi
 
 log() { echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*"; }
