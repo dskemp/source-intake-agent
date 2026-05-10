@@ -63,13 +63,24 @@ def list_dir(path: Path):
 
 
 def list_failed():
-    if not FAILED.exists():
+    return _list_quarantine(FAILED)
+
+
+DUPLICATE = INBOX / "_duplicate"
+
+
+def list_duplicates():
+    return _list_quarantine(DUPLICATE)
+
+
+def _list_quarantine(folder: Path):
+    if not folder.exists():
         return []
     out = []
-    for p in sorted(FAILED.iterdir()):
+    for p in sorted(folder.iterdir()):
         if p.suffix == ".log" or not p.is_file():
             continue
-        log_path = FAILED / f"{p.name}.log"
+        log_path = folder / f"{p.name}.log"
         log = ""
         if log_path.exists():
             try:
@@ -259,6 +270,7 @@ def status_payload():
         "runs": runs,
         "total_cost": total_cost,
         "failed": list_failed(),
+        "duplicates": list_duplicates(),
         "categories": list_categories(),
     }
 
@@ -307,6 +319,7 @@ TEMPLATE = """<!doctype html>
   .badge { display: inline-block; padding: .1rem .5rem; border-radius: 3px; font-size: .8rem; font-weight: 600; }
   .badge.ok { background: #e8f5e9; color: var(--ok); }
   .badge.bad { background: #ffebee; color: var(--bad); }
+  .badge.dup { background: #fff4e5; color: #c66800; }
   .empty { color: var(--mute); font-style: italic; padding: .75rem; }
   details { margin-top: .25rem; }
   details summary { cursor: pointer; color: var(--accent); font-size: .85rem; }
@@ -387,7 +400,11 @@ TEMPLATE = """<!doctype html>
     <tr>
       <td class="mute">{{ r.ts }}</td>
       <td><code>{{ r.input_name }}</code></td>
-      <td>{% if r.outcome == 'success' %}<span class="badge ok">success</span>{% else %}<span class="badge bad">failure</span>{% endif %}</td>
+      <td>
+        {% if r.outcome == 'success' %}<span class="badge ok">success</span>
+        {% elif r.outcome == 'duplicate' %}<span class="badge dup">duplicate</span>
+        {% else %}<span class="badge bad">failure</span>{% endif %}
+      </td>
       <td class="mute">{% if r.cost_usd %}${{ '%.3f'|format(r.cost_usd) }}{% else %}—{% endif %}</td>
       <td class="mute">{% if r.duration_ms %}{{ '%.1f'|format(r.duration_ms / 1000) }}s{% else %}—{% endif %}</td>
       <td>
@@ -427,6 +444,29 @@ TEMPLATE = """<!doctype html>
 </table>
 {% else %}
 <p class="empty">Nothing has failed.</p>
+{% endif %}
+
+<h2>Duplicates</h2>
+{% if status.duplicates %}
+<table>
+  <thead><tr><th>File</th><th>Size</th><th>Detected</th><th>Matched</th><th class="actions">Actions</th></tr></thead>
+  <tbody>
+    {% for f in status.duplicates %}
+    <tr>
+      <td><code>{{ f.name }}</code></td>
+      <td>{{ f.size|filesizeformat }}</td>
+      <td class="mute">{{ f.mtime|tsfmt }}</td>
+      <td>{% if f.log %}<details><summary>view</summary><pre>{{ f.log }}</pre></details>{% else %}<span class="mute">none</span>{% endif %}</td>
+      <td class="actions">
+        <form method="post" action="/discard-duplicate/{{ f.name|urlencode }}" onsubmit="return confirm('Delete {{ f.name }}?');"><button class="danger">Discard</button></form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+<p class="mute" style="margin-top:.5rem; font-size:.85rem">A file lands here when its bytes (or URL, for <code>.txt</code>/<code>.url</code> inputs) match an existing summary's <code>source_hash:</code> or <code>url:</code>. To force a re-process, delete the matched summary first, then move the file from <code>_duplicate/</code> back to the inbox.</p>
+{% else %}
+<p class="empty">No duplicates detected.</p>
 {% endif %}
 
 <details class="settings" id="lastrun-details">
@@ -499,13 +539,13 @@ if (lastDetails) {
 
 // Auto-refresh: re-poll /api/status every 3s and reload if anything changed.
 // Tighter cadence (3s) so completion-of-run shows up promptly.
-let lastSig = "{{ status.runs|length }}-{{ status.queue_inbox|length }}-{{ status.queue_staged|length }}-{{ status.failed|length }}-{{ 'p' if status.paused else 'w' }}-{{ 'r' if status.running else 'i' }}";
+let lastSig = "{{ status.runs|length }}-{{ status.queue_inbox|length }}-{{ status.queue_staged|length }}-{{ status.failed|length }}-{{ status.duplicates|length }}-{{ 'p' if status.paused else 'w' }}-{{ 'r' if status.running else 'i' }}";
 setInterval(async () => {
   try {
     const r = await fetch("/api/status");
     if (!r.ok) return;
     const s = await r.json();
-    const sig = `${s.runs.length}-${s.queue_inbox.length}-${s.queue_staged.length}-${s.failed.length}-${s.paused ? 'p' : 'w'}-${s.running ? 'r' : 'i'}`;
+    const sig = `${s.runs.length}-${s.queue_inbox.length}-${s.queue_staged.length}-${s.failed.length}-${(s.duplicates||[]).length}-${s.paused ? 'p' : 'w'}-${s.running ? 'r' : 'i'}`;
     if (sig !== lastSig) location.reload();
   } catch (_) {}
 }, 3000);
@@ -781,6 +821,19 @@ def discard(filename):
         abort(404)
     target.unlink()
     log_path = FAILED / f"{name}.log"
+    if log_path.exists():
+        log_path.unlink()
+    return redirect("/?flash=Discarded+" + name)
+
+
+@app.route("/discard-duplicate/<path:filename>", methods=["POST"])
+def discard_duplicate(filename):
+    name = safe_name(filename)
+    target = DUPLICATE / name
+    if not target.exists():
+        abort(404)
+    target.unlink()
+    log_path = DUPLICATE / f"{name}.log"
     if log_path.exists():
         log_path.unlink()
     return redirect("/?flash=Discarded+" + name)

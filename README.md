@@ -42,14 +42,21 @@ $INBOX/                                ← drop files here
 **Flow per file drop:**
 
 1. launchd's `WatchPaths` on the inbox fires the worker.
-2. Worker stages each file into `.staged/<uuid>-<basename>` (atomic).
-3. Invokes `claude -p "<autonomy prompt>" --model claude-sonnet-4-6
+2. **Dedup check** (before staging): SHA-256 the input bytes (and, for
+   `.txt`/`.url` inputs, extract the URL). Compare against every existing
+   summary's `source_hash:` and `url:` frontmatter fields. On match: move the
+   input to `_duplicate/` with a `.log` listing the matched summary, append a
+   `duplicate` entry to `runs.jsonl`, **skip claude entirely** (no cost), and
+   continue.
+3. Otherwise: stage the file into `.staged/<uuid>-<basename>` (atomic).
+4. Invoke `claude -p "<autonomy prompt>" --model claude-sonnet-4-6
    --permission-mode acceptEdits --output-format stream-json --verbose`,
    redirecting output to `current-run.log` so the dashboard can tail it live.
-4. On success (claude exit 0 + a new `*.summary.md` appears under a category
-   folder): deletes the staged file, regenerates `INDEX.md` from frontmatter,
-   appends a JSONL entry with cost + duration to `runs.jsonl`.
-5. On failure: moves the staged file to `_failed/` with its log next to it.
+5. On success (claude exit 0 + a new `*.summary.md` appears under a category
+   folder): inject `source_hash: "<sha256>"` into the new summary's
+   frontmatter, delete the staged file, regenerate `INDEX.md`, append a JSONL
+   entry with cost + duration to `runs.jsonl`.
+6. On failure: move the staged file to `_failed/` with its log next to it.
 
 ## Prerequisites
 
@@ -189,6 +196,36 @@ directly. The token `<STAGED_PATH>` is substituted with the staged file's path
 at run time. On first install, `__LIBRARY__` in the template is substituted
 with your configured library path.
 
+## Deduplication
+
+The worker skips files that duplicate something already in the library, so
+accidental re-drops don't cost time or money:
+
+- **Byte-identical PDFs/MDs/HTMLs** are matched by `source_hash:` (SHA-256)
+- **`.txt`/`.url` inputs** are matched by `url:` against existing summaries
+
+A duplicate lands in `_duplicate/` with a `.log` sidecar identifying the
+matched summary; you'll also see it in the dashboard's Duplicates section.
+**No claude invocation, $0 cost** for dedup-rejected files.
+
+To force re-processing of a file you really do want to re-summarize: delete
+the matched summary first, then move the file from `_duplicate/` back to the
+inbox.
+
+### Backfilling existing summaries
+
+If you're upgrading an installation that pre-dates dedup, run once to add
+`source_hash:` to the YAML frontmatter of every existing summary:
+
+```sh
+LIBRARY_PATH=$LIBRARY ~/.config/claude-source-intake/venv/bin/python \
+  scripts/backfill-hashes.py
+```
+
+The script walks the library, hashes each summary's sibling `<slug>.pdf` (or
+`.snapshot.md`), and inserts the hash into the frontmatter. Idempotent — safe
+to re-run.
+
 ## Library schema
 
 Each summary has YAML frontmatter; the auto-generated `INDEX.md` is built from
@@ -207,6 +244,7 @@ retrieved: "YYYY-MM-DD"
 snapshot: false
 category: "your-category"
 tldr: "One sentence (~25 words) that stands alone."
+source_hash: "<sha256 of the source file>"   # auto-injected by worker; used for dedup
 tags:
   - tag1
 currency_check: "YYYY-MM-DD"
@@ -257,7 +295,8 @@ source-intake-agent/
 ├── scripts/
 │   ├── worker.sh
 │   ├── dashboard.py
-│   └── regen-index.py
+│   ├── regen-index.py
+│   └── backfill-hashes.py    ← one-shot: add source_hash to existing summaries
 ├── launchd/
 │   ├── worker.plist.template
 │   └── dashboard.plist.template
