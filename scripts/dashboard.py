@@ -360,7 +360,9 @@ nav.topnav { display: flex; gap: var(--space-6); padding-bottom: var(--space-3);
 nav.topnav a { color: var(--color-text-muted); font-weight: 500; text-decoration: none; padding-bottom: var(--space-2); margin-bottom: -1px; }
 nav.topnav a:hover { color: var(--color-primary); text-decoration: none; }
 nav.topnav a.active { color: var(--color-primary); border-bottom: 2px solid var(--color-accent); }
-button, .btn { font: inherit; font-family: var(--font-ui); font-weight: 500; padding: var(--space-2) var(--space-4); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); cursor: pointer; color: var(--color-text); transition: background 100ms, border-color 100ms; }
+button, .btn { font: inherit; font-family: var(--font-ui); font-weight: 500; padding: var(--space-2) var(--space-4); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); cursor: pointer; color: var(--color-text); display: inline-block; text-decoration: none; transition: background 100ms, border-color 100ms; }
+a.btn { color: var(--color-text); }
+a.btn:hover { color: var(--color-text); text-decoration: none; }
 button:hover { background: var(--color-surface-alt); border-color: var(--color-border-strong); }
 button.primary { background: var(--color-primary); color: white; border-color: var(--color-primary); }
 button.primary:hover { background: var(--color-primary-hover); border-color: var(--color-primary-hover); }
@@ -391,6 +393,10 @@ td.actions { text-align: right; white-space: nowrap; }
 .strip { display: flex; align-items: center; gap: var(--space-4); padding: var(--space-4) var(--space-5); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-lg); box-shadow: var(--shadow-1); }
 .mute { color: var(--color-text-faint); font-size: 0.875rem; }
 .grow { flex: 1; }
+.h-suffix { color: var(--color-text-faint); font-weight: 400; text-transform: none; letter-spacing: 0; }
+h1 .h-suffix { font-size: 1rem; }
+h2 .h-suffix { font-size: 0.85rem; }
+.tagline { color: var(--color-text-faint); font-size: 0.95rem; margin: calc(-1 * var(--space-1)) 0 var(--space-5); }
 .empty { color: var(--color-text-faint); font-style: italic; padding: var(--space-4) var(--space-2); }
 .flash { padding: var(--space-3) var(--space-4); background: var(--color-accent-100); border: 1px solid #FFE69C; border-left: 3px solid var(--color-accent); border-radius: var(--radius-sm); margin-bottom: var(--space-4); font-size: 0.9rem; color: var(--color-text); }
 details summary { cursor: pointer; color: var(--color-primary-hover); font-size: 0.85rem; font-weight: 500; }
@@ -433,7 +439,7 @@ TEMPLATE = """<!doctype html>
 <body>
 {{ nav | safe }}
 <h1>Source Intake</h1>
-{% if domain %}<p class="mute" style="margin-top:-.6rem; margin-bottom:1rem">{{ domain }}</p>{% endif %}
+{% if domain %}<p class="tagline">{{ domain }}</p>{% endif %}
 
 {% if flash %}<div class="flash">{{ flash }}</div>{% endif %}
 
@@ -480,7 +486,7 @@ TEMPLATE = """<!doctype html>
 <p class="empty">Empty — drop a file in <code>{{ inbox_path }}</code></p>
 {% endif %}
 
-<h2>Recent runs {% if status.total_cost %}<span class="mute" style="font-weight:400; text-transform:none; letter-spacing:0; font-size:.85rem">— total ${{ '%.3f'|format(status.total_cost) }} across {{ status.runs|length }}</span>{% endif %}</h2>
+<h2>Recent runs {% if status.total_cost %}<span class="h-suffix">— total ${{ '%.3f'|format(status.total_cost) }} across {{ status.runs|length }}</span>{% endif %}</h2>
 {% if status.runs %}
 <table>
   <thead><tr><th style="width:12rem">When</th><th>Input</th><th>Outcome</th><th style="width:6rem">Cost</th><th style="width:5rem">Time</th><th>Output / error</th></tr></thead>
@@ -488,7 +494,7 @@ TEMPLATE = """<!doctype html>
     {% for r in status.runs %}
     <tr>
       <td class="mute">{{ r.ts }}</td>
-      <td><code>{{ r.input_name }}</code></td>
+      <td>{% if r.output_paths_relative %}<a href="/source/{{ r.output_paths_relative[0]|urlencode }}"><code>{{ r.input_name }}</code></a>{% else %}<code>{{ r.input_name }}</code>{% endif %}</td>
       <td>
         {% if r.outcome == 'success' %}<span class="badge ok">success</span>
         {% elif r.outcome == 'duplicate' %}<span class="badge dup">duplicate</span>
@@ -700,6 +706,8 @@ LIBRARY_TEMPLATE = """<!doctype html>
   .title a:hover { color: var(--color-primary); text-decoration: none; }
   .tldr { font-size: 0.92rem; line-height: 1.55; color: var(--color-text-muted); font-family: var(--font-ui); }
   .meta { font-size: 0.82rem; color: var(--color-text-faint); margin-top: 0.2rem; }
+  .meta a { color: var(--color-text-faint); }
+  .meta a:hover { color: var(--color-text-muted); text-decoration: underline; }
   .tags { margin-top: var(--space-2); display: flex; flex-wrap: wrap; gap: 0.3rem; }
   .tag { display: inline-block; padding: 0.1rem 0.5rem; background: var(--color-primary-50); color: var(--color-primary); border-radius: var(--radius-sm); font-size: 0.72rem; font-weight: 500; cursor: pointer; font-family: var(--font-ui); transition: background 100ms; }
   .tag:hover { background: #DBE5F0; }
@@ -709,8 +717,8 @@ LIBRARY_TEMPLATE = """<!doctype html>
 </head>
 <body>
 {{ nav | safe }}
-<h1>Library <span class="mute" style="font-weight:400; font-size:.95rem">— {{ total }} sources across {{ by_cat|length }} {{ 'category' if by_cat|length == 1 else 'categories' }}</span></h1>
-{% if domain %}<p class="mute" style="margin-top:-.6rem; margin-bottom:1rem">{{ domain }}</p>{% endif %}
+<h1>Library <span class="h-suffix">— {{ total }} sources across {{ by_cat|length }} {{ 'category' if by_cat|length == 1 else 'categories' }}</span></h1>
+{% if domain %}<p class="tagline">{{ domain }}</p>{% endif %}
 
 <div class="controls">
   <input id="filter" type="search" placeholder="Filter by title, tldr, author, tag, category…" autofocus>
@@ -722,7 +730,7 @@ LIBRARY_TEMPLATE = """<!doctype html>
 {% for cat in cats %}
 {% if cat in by_cat %}
 <section data-cat="{{ cat }}">
-  <h2>{{ cat }} <span class="mute" style="font-weight:400; text-transform:none; letter-spacing:0; font-size:.85rem">({{ by_cat[cat]|length }})</span></h2>
+  <h2>{{ cat }} <span class="h-suffix">({{ by_cat[cat]|length }})</span></h2>
   <table>
     <thead><tr><th style="width:24%">Title</th><th>Tl;dr</th><th style="width:8%">Year</th><th style="width:5rem"></th></tr></thead>
     <tbody>
@@ -732,8 +740,8 @@ LIBRARY_TEMPLATE = """<!doctype html>
           <div class="title"><a href="/source/{{ s.rel_path|urlencode }}">{{ s.title }}</a></div>
           <div class="meta">
             {{ short_authors(s.authors) }}
-            {% if s.url %} · <a href="{{ s.url }}" target="_blank" rel="noopener" style="color:var(--color-text-faint)">url ↗</a>{% endif %}
-            {% if s.source_file %} · <a href="/file/{{ s.source_file.rel_path|urlencode }}" target="_blank" rel="noopener" style="color:var(--color-text-faint)">{{ s.source_file.kind }} ↗</a>{% endif %}
+            {% if s.url %} · <a href="{{ s.url }}" target="_blank" rel="noopener">url ↗</a>{% endif %}
+            {% if s.source_file %} · <a href="/file/{{ s.source_file.rel_path|urlencode }}" target="_blank" rel="noopener">{{ s.source_file.kind }} ↗</a>{% endif %}
           </div>
           <div class="tags">{% for t in s.tags %}<span class="tag" onclick="setFilter('{{ t|e }}')">{{ t }}</span>{% endfor %}</div>
         </td>
