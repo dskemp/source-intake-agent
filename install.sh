@@ -108,10 +108,22 @@ deploy_script() {
   fi
 }
 say "Deploying scripts to $SCRIPTS_DIR..."
-chmod +x "$REPO_ROOT/scripts/worker.sh" "$REPO_ROOT/scripts/dashboard.py" "$REPO_ROOT/scripts/regen-index.py"
+# Repo files are tracked +x in git; `install -m 0755` and symlink mode both
+# ensure the deployed paths end up executable without modifying the repo.
 deploy_script "$REPO_ROOT/scripts/worker.sh"      "$SCRIPTS_DIR/claude-source-intake.sh"
 deploy_script "$REPO_ROOT/scripts/dashboard.py"   "$SCRIPTS_DIR/claude-source-intake-ui.py"
 deploy_script "$REPO_ROOT/scripts/regen-index.py" "$SCRIPTS_DIR/claude-source-intake-regen-index.py"
+
+# Enforce 0600 on the API key file if it already exists. The README tells
+# the user to chmod 600 themselves, but it's the kind of thing that drifts;
+# better to converge it on every install run.
+if [[ -f "$CONFIG/env" ]]; then
+  current=$(stat -f %A "$CONFIG/env" 2>/dev/null || echo "")
+  if [[ -n "$current" && "$current" != "600" ]]; then
+    say "Tightening perms on $CONFIG/env ($current -> 600)"
+    chmod 600 "$CONFIG/env"
+  fi
+fi
 
 # --- Default prompt (only if missing) -----------------------------------------
 if [[ ! -f "$CONFIG/prompt.txt" ]]; then

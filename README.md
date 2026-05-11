@@ -146,7 +146,24 @@ next file drop.
 
 `install.sh` is idempotent — re-running it refreshes the deployed scripts and
 reloads the launchd agents without touching your API key, run history, or
-custom prompt.
+custom prompt. It also tightens permissions on `$CONFIG/env` to `0600` if
+they've drifted.
+
+### Runtime tunables
+
+These don't affect install; the worker reads them from `$CONFIG/env` (or the
+launchd plist `EnvironmentVariables`). Defaults are sensible — override only if
+you have a reason.
+
+| Var | Default | Effect |
+| --- | --- | --- |
+| `MODEL` | `claude-sonnet-4-6` | `--model` passed to `claude`. Bump when a newer model ships. |
+| `CLAUDE_TIMEOUT` | `900` | Wall-clock seconds before the watchdog kills a hung `claude` (SIGTERM, then SIGKILL 3s later). Normalized to exit 124. |
+| `MAX_RETRIES` | `2` | Number of retries after the first attempt (so up to 3 attempts). Exit 127 (binary missing) skips retries. |
+| `RETRY_BACKOFF` | `30` | Seconds between retries. |
+| `RUNS_LOG_MAX_BYTES` | `5242880` | Rotate `runs.jsonl` past 5 MB; previous file becomes `runs.jsonl.1`. |
+| `RUN_LOG_KEEP` | `50` | Per-iteration stream-json archives kept under `$CONFIG/run-logs/`. |
+| `DASHBOARD_PORT` | `7341` | Localhost port the dashboard binds to. |
 
 ## Keeping the repo and the running system in sync
 
@@ -297,6 +314,9 @@ Library page. The skill is instructed to include it on every intake.
 | Dashboard not at localhost:7341 | Port collision or agent crashed | `tail /tmp/claude-source-intake-ui.err.log`; `launchctl kickstart -k gui/$(id -u)/<prefix>.claude-source-intake-ui` |
 | Library page shows zero sources | `LIBRARY` env not set in plist, or summaries lack `---` frontmatter | Re-run `install.sh`; verify summaries have YAML frontmatter |
 | `INDEX.md` won't regenerate | PyYAML missing from venv | `~/.config/claude-source-intake/venv/bin/pip install -r requirements.txt` |
+| Run keeps timing out at the `CLAUDE_TIMEOUT` ceiling | Large PDF or slow upstream | Raise `CLAUDE_TIMEOUT` in `$CONFIG/env` (e.g. `CLAUDE_TIMEOUT=1800`). |
+| Dashboard rejects POSTs with `403 cross-origin request blocked` | A browser extension or external site is hitting localhost | Expected — the CSRF guard blocks it. Use the dashboard directly. |
+| Stale `/tmp/claude-source-intake.lock` blocks all runs | Worker was killed before its trap fired | The next worker invocation detects the dead holder PID and reclaims automatically. To force-clear: `rm -rf /tmp/claude-source-intake.lock`. |
 
 Logs to check:
 
