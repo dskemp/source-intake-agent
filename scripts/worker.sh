@@ -273,11 +273,29 @@ print(template.replace("<STAGED_PATH>", sys.argv[2]).replace("<DOMAIN>", domain)
   if (( claude_exit == 0 )) && (( num_produced > 0 )); then
     log "  success (claude exit 0, $num_produced summary file(s) produced)"
     # Inject source_hash into each produced summary so future drops dedup.
+    # Also ensure the original input is filed alongside the summary as
+    # <slug>.pdf — the source-intake skill is supposed to copy it, but isn't
+    # always registered for headless runs, in which case the agent's manual
+    # fallback can forget the copy step. Belt-and-suspenders here.
     input_hash=$(file_sha256 "$staged_path")
+    is_pdf=0
+    [[ "$base" == *.[Pp][Dd][Ff] ]] && is_pdf=1
     while IFS= read -r produced_path; do
       [[ -n "$produced_path" ]] || continue
       if inject_hash "$produced_path" "$input_hash"; then
         log "  injected source_hash into $produced_path"
+      fi
+      if (( is_pdf )); then
+        folder=$(dirname "$produced_path")
+        slug=$(basename "$produced_path" .summary.md)
+        pdf_target="$folder/$slug.pdf"
+        if [[ ! -f "$pdf_target" ]]; then
+          if cp "$staged_path" "$pdf_target"; then
+            log "  filed PDF -> $pdf_target"
+          else
+            log "  WARNING: failed to copy PDF to $pdf_target"
+          fi
+        fi
       fi
     done < "$produced_list"
     rm -f "$staged_path"
