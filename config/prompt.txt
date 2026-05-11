@@ -31,3 +31,13 @@ Scope — IMPORTANT:
 - Do NOT touch INDEX.md (the wrapper regenerates it from frontmatter).
 - Do NOT update or create CHANGELOG.md.
 - Do NOT delete the input file (the wrapper handles cleanup).
+
+Workspace discipline — IMPORTANT:
+- The .staged/ directory is a managed queue. Read FROM the input file
+  there, but do NOT write anything into .staged/ — no helper scripts,
+  no scratch files, no metadata extracts. Anything left behind there
+  appears as a stuck job in the dashboard.
+- For scratch work (temporary helper scripts, intermediate extractions,
+  experiments), use $TMPDIR or /tmp/. The OS cleans those up.
+- The only files you should create are inside the destination
+  <category>/<slug>/ folder.

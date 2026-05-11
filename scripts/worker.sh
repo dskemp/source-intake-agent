@@ -1,9 +1,26 @@
 #!/bin/bash
 set -euo pipefail
 
+CONFIG="$HOME/.config/claude-source-intake"
+ENV_FILE="$CONFIG/env"
+
+# Source $CONFIG/env FIRST so values it sets — ANTHROPIC_API_KEY, plus any
+# tunables the user wants to override (MODEL, CLAUDE_TIMEOUT, etc.) — are
+# in effect when the parameter expansions below evaluate. launchd-spawned
+# processes don't inherit your shell's env, so this file is also where
+# ANTHROPIC_API_KEY lives. Mode 0600 enforced by install.sh.
+if [[ -f "$ENV_FILE" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$ENV_FILE"
+  set +a
+fi
+
+# NB: install.sh consumes INBOX/LIBRARY and renders them into the launchd
+# plist as INBOX_PATH/LIBRARY_PATH. The asymmetry is intentional — the
+# plist exposes the "_PATH" suffix to make the runtime contract explicit.
 INBOX="${INBOX_PATH:-$HOME/source-library-inbox}"
 LIBRARY="${LIBRARY_PATH:-$HOME/source-library}"
-CONFIG="$HOME/.config/claude-source-intake"
 CLAUDE="${CLAUDE_BIN:-$(command -v claude || echo $HOME/.local/bin/claude)}"
 PYTHON="$CONFIG/venv/bin/python"
 
@@ -11,19 +28,17 @@ LOCKDIR="/tmp/claude-source-intake.lock"
 PROMPT_FILE="$CONFIG/prompt.txt"
 PAUSED_FLAG="$CONFIG/paused"
 RUNS_LOG="$CONFIG/runs.jsonl"
-ENV_FILE="$CONFIG/env"
+RUN_LOGS_DIR="$CONFIG/run-logs"
 
-mkdir -p "$INBOX/.staged" "$INBOX/_failed" "$INBOX/_duplicate" "$CONFIG"
+# Tunables (override via the env file above, or the launchd plist).
+MODEL="${MODEL:-claude-sonnet-4-6}"
+CLAUDE_TIMEOUT="${CLAUDE_TIMEOUT:-900}"          # 15 min wall clock per attempt
+MAX_RETRIES="${MAX_RETRIES:-2}"                  # 0 = single attempt, 2 = up to 3 attempts
+RETRY_BACKOFF="${RETRY_BACKOFF:-30}"             # seconds between retries
+RUNS_LOG_MAX_BYTES="${RUNS_LOG_MAX_BYTES:-5242880}"   # rotate runs.jsonl > 5 MB
+RUN_LOG_KEEP="${RUN_LOG_KEEP:-50}"               # number of per-iteration archives to retain
 
-# launchd-spawned processes don't inherit your shell's env or interactive
-# Claude session vars. Put ANTHROPIC_API_KEY (and any other auth/config
-# claude needs) in ~/.config/claude-source-intake/env - mode 0600.
-if [[ -f "$ENV_FILE" ]]; then
-  set -a
-  # shellcheck disable=SC1090
-  source "$ENV_FILE"
-  set +a
-fi
+mkdir -p "$INBOX/.staged" "$INBOX/_failed" "$INBOX/_duplicate" "$CONFIG" "$RUN_LOGS_DIR"
 
 if [[ ! -f "$PROMPT_FILE" ]]; then
   echo "ERROR: prompt file missing at $PROMPT_FILE" >&2
@@ -158,16 +173,62 @@ with open(runs_log, "a") as f:
 PY
 }
 
+# Rotate runs.jsonl if it has grown past the configured ceiling. Keeps one
+# generation of history (.1) so post-mortem grep still works on recent past.
+if [[ -f "$RUNS_LOG" ]]; then
+  size=$(stat -f %z "$RUNS_LOG" 2>/dev/null || echo 0)
+  if (( size > RUNS_LOG_MAX_BYTES )); then
+    log "rotating runs.jsonl (${size} bytes > ${RUNS_LOG_MAX_BYTES})"
+    rm -f "${RUNS_LOG}.1" 2>/dev/null || true
+    mv "$RUNS_LOG" "${RUNS_LOG}.1" 2>/dev/null || true
+    : > "$RUNS_LOG"
+  fi
+fi
+
+# Acquire the worker lock. Writes our PID into the lockdir so a stale lock
+# left by a killed worker can be detected and reclaimed.
+acquire_lock() {
+  if mkdir "$LOCKDIR" 2>/dev/null; then
+    echo "$$" > "$LOCKDIR/pid"
+    return 0
+  fi
+  local holder
+  holder=$(cat "$LOCKDIR/pid" 2>/dev/null || echo "")
+  if [[ -n "$holder" ]] && kill -0 "$holder" 2>/dev/null; then
+    log "another worker instance is running (pid $holder); exiting"
+    return 1
+  fi
+  # Holder is dead or unknown — reclaim. Lock-dir mtime helps diagnose.
+  local age="?"
+  age=$(stat -f %m "$LOCKDIR" 2>/dev/null || echo "")
+  log "stale lock detected (holder pid=${holder:-unknown}, lock mtime=${age}); reclaiming"
+  rm -rf "$LOCKDIR"
+  if mkdir "$LOCKDIR" 2>/dev/null; then
+    echo "$$" > "$LOCKDIR/pid"
+    return 0
+  fi
+  log "failed to reclaim lock after stale-detection (lost race?); exiting"
+  return 1
+}
+
 if [[ -e "$PAUSED_FLAG" ]]; then
   log "watcher paused; exiting"
   exit 0
 fi
 
-if ! mkdir "$LOCKDIR" 2>/dev/null; then
-  log "another worker instance is running; exiting"
+if ! acquire_lock; then
   exit 0
 fi
-trap 'rmdir "$LOCKDIR" 2>/dev/null || true' EXIT
+trap 'rm -rf "$LOCKDIR" 2>/dev/null || true' EXIT
+
+# Sweep stale files left in .staged/ from a previous run. With the lock
+# held we know no other worker is touching .staged/, so anything here is
+# an orphan (e.g. a helper script Claude wrote and didn't clean up).
+stale_in_staged=$(find "$INBOX/.staged" -mindepth 1 -type f 2>/dev/null | wc -l | tr -d ' ')
+if (( stale_in_staged > 0 )); then
+  log "found $stale_in_staged stale file(s) in .staged/; cleaning up"
+  find "$INBOX/.staged" -mindepth 1 -type f -delete 2>/dev/null || true
+fi
 
 NOW=$(date +%s)
 processed_any=0
@@ -248,19 +309,77 @@ domain = os.environ.get("DOMAIN", "A general-purpose personal research library."
 print(template.replace("<STAGED_PATH>", sys.argv[2]).replace("<DOMAIN>", domain), end="")
 ' "$PROMPT_FILE" "$staged_path")
 
-  set +e
-  (
-    cd "$LIBRARY"
-    "$CLAUDE" -p "$prompt" \
-      --model claude-sonnet-4-6 \
-      --permission-mode acceptEdits \
-      --add-dir "$LIBRARY" \
-      --add-dir "$INBOX/.staged" \
-      --output-format stream-json \
-      --verbose
-  ) >>"$run_log" 2>&1
-  claude_exit=$?
-  set -e
+  # Run claude with a wall-clock timeout AND a retry loop. The watchdog
+  # subshell SIGTERMs claude after CLAUDE_TIMEOUT seconds, then SIGKILLs
+  # if it doesn't respond. Exit codes mapped to: 124 = our timeout,
+  # 127 = binary missing (no point retrying), anything else = retryable.
+  # Deny rules block writes into .staged/ — Claude needs Read access
+  # (granted via --add-dir) but the staging dir is a managed queue.
+  # The // prefix marks absolute paths in Claude Code's permission DSL;
+  # $INBOX starts with /, so "/${INBOX}" yields "//Users/...".
+  attempt=0
+  claude_exit=0
+  while :; do
+    attempt=$((attempt + 1))
+    printf '{"type":"meta","kind":"attempt","ts":"%s","attempt":%d}\n' \
+      "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$attempt" >> "$run_log"
+
+    set +e
+    {
+      cd "$LIBRARY"
+      exec "$CLAUDE" -p "$prompt" \
+        --model "$MODEL" \
+        --permission-mode acceptEdits \
+        --add-dir "$LIBRARY" \
+        --add-dir "$INBOX/.staged" \
+        --disallowed-tools \
+          "Write(/${INBOX}/.staged/**)" \
+          "Edit(/${INBOX}/.staged/**)" \
+          "NotebookEdit(/${INBOX}/.staged/**)" \
+        --output-format stream-json \
+        --verbose
+    } >>"$run_log" 2>&1 &
+    claude_pid=$!
+
+    (
+      sleep "$CLAUDE_TIMEOUT"
+      if kill -0 "$claude_pid" 2>/dev/null; then
+        kill -TERM "$claude_pid" 2>/dev/null || true
+        sleep 3
+        kill -KILL "$claude_pid" 2>/dev/null || true
+        printf '{"type":"meta","kind":"timeout","ts":"%s","after_s":%d}\n' \
+          "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$CLAUDE_TIMEOUT" >> "$run_log"
+      fi
+    ) &
+    watchdog_pid=$!
+
+    wait "$claude_pid"
+    claude_exit=$?
+    set -e
+
+    # Stop the watchdog if claude finished naturally.
+    kill "$watchdog_pid" 2>/dev/null || true
+    wait "$watchdog_pid" 2>/dev/null || true
+
+    # If claude was killed by the watchdog the exit code is 143 (SIGTERM)
+    # or 137 (SIGKILL); normalize to 124 so the runs log reads cleanly.
+    if (( claude_exit == 143 || claude_exit == 137 )); then
+      claude_exit=124
+    fi
+
+    if (( claude_exit == 0 )); then
+      break
+    fi
+    if (( claude_exit == 127 )); then
+      log "  claude binary missing (exit 127); not retrying"
+      break
+    fi
+    if (( attempt > MAX_RETRIES )); then
+      break
+    fi
+    log "  attempt $attempt failed (exit $claude_exit); retrying in ${RETRY_BACKOFF}s"
+    sleep "$RETRY_BACKOFF"
+  done
 
   printf '{"type":"meta","kind":"end","ts":"%s","exit":%d}\n' \
     "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$claude_exit" >> "$run_log"
@@ -321,6 +440,25 @@ print(template.replace("<STAGED_PATH>", sys.argv[2]).replace("<DOMAIN>", domain)
     cp "$run_log" "${fail_dest}.log"
     append_run "$start_ts" "$base" "failure" "$produced_list" "$run_log" "$run_log"
   fi
+
+  # Archive this iteration's run log under a unique name so a multi-file
+  # tick doesn't lose the middle iterations. current-run.log / last-run.log
+  # still get clobbered as before — they're the dashboard's live-tail and
+  # most-recent-replay slots — but run-logs/ keeps the last RUN_LOG_KEEP.
+  archive_ts=$(date -u '+%Y%m%dT%H%M%SZ')
+  # Sanitize base for safe filename use: replace anything not alnum/._- with _
+  safe_base=$(printf '%s' "$base" | tr -c 'A-Za-z0-9._-' '_')
+  cp "$run_log" "$RUN_LOGS_DIR/${archive_ts}-${safe_base}.log" 2>/dev/null || true
+  # Prune to the most recent RUN_LOG_KEEP archives. Names are timestamp-prefixed
+  # so they sort lexicographically by recency.
+  ( cd "$RUN_LOGS_DIR" && ls -1 *.log 2>/dev/null | sort -r | awk -v k="$RUN_LOG_KEEP" 'NR > k' | while IFS= read -r f; do rm -f -- "$f"; done ) || true
+
+  # Sweep any files Claude wrote into .staged/ during this iteration.
+  # The iteration's own staged input is already gone (success: rm'd above;
+  # failure: mv'd to _failed/), so anything still here is an artifact
+  # (helper scripts, scratch files, etc.) that would otherwise show up
+  # as a stuck job in the dashboard.
+  find "$INBOX/.staged" -mindepth 1 -type f -delete 2>/dev/null || true
 
   rm -f "$produced_list" "$sentinel"
 done

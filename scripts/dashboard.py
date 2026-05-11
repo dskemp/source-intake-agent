@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Local dashboard for the autonomous source-intake pipeline.
 
-Binds to 127.0.0.1:7341 only. No auth - relies on localhost-only binding.
+Binds to 127.0.0.1 only. Cross-origin POSTs are blocked at the
+request layer as defense-in-depth against browser CSRF (see
+`block_cross_origin_post` below).
 """
 import json
 import os
@@ -11,6 +13,7 @@ import subprocess
 import time
 from pathlib import Path
 
+import bleach
 import markdown
 import yaml
 from flask import Flask, abort, jsonify, redirect, render_template_string, request, send_file
@@ -24,11 +27,46 @@ CONFIG = HOME / ".config/claude-source-intake"
 PROMPT_FILE = CONFIG / "prompt.txt"
 PAUSED_FLAG = CONFIG / "paused"
 RUNS_LOG = CONFIG / "runs.jsonl"
+WORKER_OUT_LOG = "/tmp/claude-source-intake.out.log"
+WORKER_ERR_LOG = "/tmp/claude-source-intake.err.log"
 WORKER = HOME / "Library/Scripts/claude-source-intake.sh"
 
-PORT = 7341
+PORT = int(os.environ.get("DASHBOARD_PORT", "7341"))
 
+# Origins permitted to make state-changing requests. Browser CSRF defense.
+ALLOWED_ORIGINS = frozenset({
+    f"http://127.0.0.1:{PORT}",
+    f"http://localhost:{PORT}",
+})
+
+# UUID prefix the worker assigns to staged input files. Must stay in sync
+# with the `uuidgen` line in scripts/worker.sh — if that contract changes,
+# strip_uuid and stray-detection here will break.
 UUID_PREFIX = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-")
+
+# Whitelist for sanitizing LLM-generated markdown. LLM-written summaries
+# are untrusted output — a prompt-injecting PDF could induce hostile HTML.
+# Bleach strips anything not on this list, including script tags and event
+# handlers on permitted tags.
+ALLOWED_HTML_TAGS = [
+    "p", "br", "strong", "em", "del", "code", "pre",
+    "h1", "h2", "h3", "h4", "h5", "h6",
+    "ul", "ol", "li",
+    "blockquote", "hr",
+    "a", "img",
+    "table", "thead", "tbody", "tr", "th", "td",
+    "sup", "sub",
+]
+ALLOWED_HTML_ATTRS = {
+    "a": ["href", "title"],
+    "img": ["src", "alt", "title"],
+    "*": ["id", "class"],
+}
+ALLOWED_HTML_PROTOCOLS = ["http", "https", "mailto"]
+
+# File extensions /api/open will hand off to the OS. Anything else (e.g.
+# executables, scripts) is refused even if it lives inside the library.
+OPENABLE_EXTS = frozenset({".pdf", ".md", ".html", ".htm", ".txt"})
 
 
 def strip_uuid(name: str) -> str:
@@ -100,7 +138,18 @@ def _list_quarantine(folder: Path):
 def recent_runs(limit=20):
     if not RUNS_LOG.exists():
         return []
-    lines = RUNS_LOG.read_text().splitlines()
+    # Tail-read so we don't scan the whole file on every dashboard request.
+    # The worker rotates runs.jsonl when it crosses RUNS_LOG_MAX_BYTES; old
+    # entries land in runs.jsonl.1 and are not shown here.
+    try:
+        result = subprocess.run(
+            ["tail", "-n", str(limit * 2), str(RUNS_LOG)],
+            capture_output=True, text=True, check=True, timeout=2,
+        )
+        lines = result.stdout.splitlines()
+    except (subprocess.SubprocessError, OSError):
+        # Fallback for unusual environments (no tail in PATH, perms, etc.)
+        lines = RUNS_LOG.read_text(errors="replace").splitlines()
     library_resolved = LIBRARY.resolve() if LIBRARY.exists() else None
     out = []
     for line in lines[-limit:]:
@@ -285,7 +334,13 @@ def parse_event(line: str):
 
 
 def status_payload():
-    staged = list_dir(STAGED)
+    # A real in-flight job is UUID-prefixed by the worker. Anything else
+    # in .staged/ is a stray (worker leftover, manually dropped file, etc.)
+    # and must not light up the "Processing" banner — that's how an
+    # orphan helper script was being reported as "running 11h."
+    all_staged = list_dir(STAGED)
+    staged = [f for f in all_staged if UUID_PREFIX.match(f["name"])]
+    strays = [f for f in all_staged if not UUID_PREFIX.match(f["name"])]
     running = None
     if staged:
         first = staged[0]
@@ -298,6 +353,7 @@ def status_payload():
         "paused": PAUSED_FLAG.exists(),
         "queue_inbox": list_dir(INBOX),
         "queue_staged": staged,
+        "strays": strays,
         "running": running,
         "runs": runs,
         "total_cost": total_cost,
@@ -308,6 +364,28 @@ def status_payload():
 
 
 app = Flask(__name__)
+
+
+@app.before_request
+def block_cross_origin_post():
+    """CSRF defense. The dashboard binds to 127.0.0.1 only, but any local
+    process — including a browser visiting a malicious site that scripts
+    a POST to localhost — can reach it. We block state-changing requests
+    whose Origin or Sec-Fetch-Site indicates they didn't originate here.
+
+    Non-browser local clients (curl, scripts) typically send neither header
+    and are still allowed. That preserves the prior trust model for local
+    automation while closing the browser-CSRF hole.
+    """
+    if request.method in ("GET", "HEAD", "OPTIONS"):
+        return None
+    origin = request.headers.get("Origin", "")
+    if origin and origin not in ALLOWED_ORIGINS:
+        abort(403, "cross-origin request blocked")
+    fetch_site = request.headers.get("Sec-Fetch-Site", "")
+    if fetch_site and fetch_site not in ("same-origin", "none"):
+        abort(403, "non-same-origin request blocked")
+    return None
 
 
 FONT_LINK = """<link rel="preconnect" href="https://fonts.googleapis.com">
@@ -520,6 +598,26 @@ TEMPLATE = """<!doctype html>
 <p class="empty">No runs yet.</p>
 {% endif %}
 
+{% if status.strays %}
+<h2>Stray files in .staged/ <span class="h-suffix">— not part of any active run</span></h2>
+<table>
+  <thead><tr><th>File</th><th>Size</th><th>Modified</th><th class="actions">Actions</th></tr></thead>
+  <tbody>
+    {% for f in status.strays %}
+    <tr>
+      <td><code>{{ f.name }}</code></td>
+      <td>{{ f.size|filesizeformat }}</td>
+      <td class="mute">{{ f.mtime|tsfmt }}</td>
+      <td class="actions">
+        <form method="post" action="/discard-stray/{{ f.name|urlencode }}" onsubmit="return confirm('Delete {{ f.name }}?');"><button class="danger">Discard</button></form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+<p class="mute" style="margin-top:.5rem; font-size:.85rem">These files were left in <code>.staged/</code> without the UUID prefix the worker assigns to real jobs. The next worker tick will also sweep them automatically.</p>
+{% endif %}
+
 <h2>Failed items</h2>
 {% if status.failed %}
 <table>
@@ -636,13 +734,13 @@ if (lastDetails) {
 
 // Auto-refresh: re-poll /api/status every 3s and reload if anything changed.
 // Tighter cadence (3s) so completion-of-run shows up promptly.
-let lastSig = "{{ status.runs|length }}-{{ status.queue_inbox|length }}-{{ status.queue_staged|length }}-{{ status.failed|length }}-{{ status.duplicates|length }}-{{ 'p' if status.paused else 'w' }}-{{ 'r' if status.running else 'i' }}";
+let lastSig = "{{ status.runs|length }}-{{ status.queue_inbox|length }}-{{ status.queue_staged|length }}-{{ status.strays|length }}-{{ status.failed|length }}-{{ status.duplicates|length }}-{{ 'p' if status.paused else 'w' }}-{{ 'r' if status.running else 'i' }}";
 setInterval(async () => {
   try {
     const r = await fetch("/api/status");
     if (!r.ok) return;
     const s = await r.json();
-    const sig = `${s.runs.length}-${s.queue_inbox.length}-${s.queue_staged.length}-${s.failed.length}-${(s.duplicates||[]).length}-${s.paused ? 'p' : 'w'}-${s.running ? 'r' : 'i'}`;
+    const sig = `${s.runs.length}-${s.queue_inbox.length}-${s.queue_staged.length}-${(s.strays||[]).length}-${s.failed.length}-${(s.duplicates||[]).length}-${s.paused ? 'p' : 'w'}-${s.running ? 'r' : 'i'}`;
     if (sig !== lastSig) location.reload();
   } catch (_) {}
 }, 3000);
@@ -900,8 +998,19 @@ SOURCE_TEMPLATE = """<!doctype html>
 
 
 def render_markdown(body: str) -> str:
+    """Convert summary markdown to HTML, then strip anything not in the
+    allowlist. Summaries are LLM-authored from arbitrary PDFs — without
+    this pass a prompt-injecting source could inject scripts that run
+    when the user opens the source page."""
     md = markdown.Markdown(extensions=["extra", "sane_lists", "smarty"], output_format="html5")
-    return md.convert(body)
+    raw_html = md.convert(body)
+    return bleach.clean(
+        raw_html,
+        tags=ALLOWED_HTML_TAGS,
+        attributes=ALLOWED_HTML_ATTRS,
+        protocols=ALLOWED_HTML_PROTOCOLS,
+        strip=True,
+    )
 
 
 @app.route("/source/<path:rel>")
@@ -979,6 +1088,8 @@ def api_open():
         abort(400, "outside library")
     if not target.exists():
         abort(404)
+    if target.suffix.lower() not in OPENABLE_EXTS:
+        abort(415, "file type not openable")
     subprocess.Popen(["open", str(target)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return ("", 204)
 
@@ -1018,13 +1129,20 @@ def resume():
 
 @app.route("/trigger", methods=["POST"])
 def trigger():
+    # Route worker output to the same log files launchd writes to so
+    # errors don't silently disappear when the user hits "Run now."
+    # opened in append mode, closed when the child process exits.
+    try:
+        out = open(WORKER_OUT_LOG, "a")
+        err = open(WORKER_ERR_LOG, "a")
+    except OSError:
+        out = err = subprocess.DEVNULL
     subprocess.Popen(
         ["/bin/bash", str(WORKER)],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=out, stderr=err,
         start_new_session=True,
     )
-    return redirect("/?flash=Worker+triggered")
+    return redirect("/?flash=Worker+triggered+%28check+/tmp+logs+for+errors%29")
 
 
 @app.route("/retry/<path:filename>", methods=["POST"])
@@ -1070,6 +1188,20 @@ def discard_duplicate(filename):
     if log_path.exists():
         log_path.unlink()
     return redirect("/?flash=Discarded+" + name)
+
+
+@app.route("/discard-stray/<path:filename>", methods=["POST"])
+def discard_stray(filename):
+    name = safe_name(filename)
+    # Reject UUID-prefixed files — those are real in-flight jobs the
+    # worker is processing, not strays.
+    if UUID_PREFIX.match(name):
+        abort(400, "not a stray (UUID-prefixed)")
+    target = STAGED / name
+    if not target.exists():
+        abort(404)
+    target.unlink()
+    return redirect("/?flash=Discarded+stray+" + name)
 
 
 @app.route("/prompt", methods=["POST"])
