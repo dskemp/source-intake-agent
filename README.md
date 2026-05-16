@@ -35,11 +35,13 @@ $INBOX/                                ← drop files here
 ~/Library/Scripts/                     (deployed by install.sh)
   ├── claude-source-intake.sh
   ├── claude-source-intake-ui.py
-  └── claude-source-intake-regen-index.py
+  ├── claude-source-intake-regen-index.py
+  └── claude-source-intake-check-preprints.py
 
 ~/Library/LaunchAgents/
-  ├── <prefix>.claude-source-intake.plist        (WatchPaths trigger)
-  └── <prefix>.claude-source-intake-ui.plist     (dashboard server)
+  ├── <prefix>.claude-source-intake.plist                 (WatchPaths trigger)
+  ├── <prefix>.claude-source-intake-ui.plist              (dashboard server)
+  └── <prefix>.claude-source-intake-preprint-check.plist  (weekly cron)
 ```
 
 **Flow per file drop:**
@@ -102,6 +104,7 @@ Configuration is layered — later sources override earlier ones:
 | `LABEL_PREFIX`   | `com.user`                    | Reverse-DNS prefix for plist labels           |
 | `CLAUDE_BIN`     | `$(command -v claude)`        | Path to the `claude` CLI binary               |
 | `CATEGORY_ORDER` | *(empty — alphabetical)*      | Comma-separated preferred sort for categories |
+| `OPENALEX_EMAIL` | *(empty — anonymous)*         | Opts the weekly preprint check into OpenAlex's polite pool |
 
 Recommended workflow: keep your real paths in `.env` (which is `.gitignore`d)
 so they never leak into commit history.
@@ -164,6 +167,7 @@ you have a reason.
 | `RUNS_LOG_MAX_BYTES` | `5242880` | Rotate `runs.jsonl` past 5 MB; previous file becomes `runs.jsonl.1`. |
 | `RUN_LOG_KEEP` | `50` | Per-iteration stream-json archives kept under `$CONFIG/run-logs/`. |
 | `DASHBOARD_PORT` | `7341` | Localhost port the dashboard binds to. |
+| `PREPRINT_REFRESH_DAYS` | `7` | Preprint cache entries older than this are re-checked. Read by `check-preprints.py` and shown on `/preprints`. |
 
 ## Keeping the repo and the running system in sync
 
@@ -201,6 +205,7 @@ What needs reloading after each kind of edit:
 | `scripts/worker.sh` | nothing — invoked fresh per file drop |
 | `scripts/dashboard.py` | `launchctl kickstart -k gui/$(id -u)/<prefix>.claude-source-intake-ui` |
 | `scripts/regen-index.py` | nothing — invoked fresh after each successful run |
+| `scripts/check-preprints.py` | nothing — invoked fresh by cron / dashboard |
 | `launchd/*.plist.template` | re-run `./install.sh` (re-renders + reloads agents) |
 | `config/prompt.txt` | doesn't auto-propagate — see note below |
 | `requirements.txt` | re-run `./install.sh` (re-runs pip install) |
@@ -234,6 +239,10 @@ ls -l ~/Library/Scripts/claude-source-intake.sh
     summaries, summaries missing their original sidecar (`.pdf` / `.snapshot.md`),
     and unparseable frontmatter. Has a one-click **Regenerate INDEX.md** button
     to fix the stale-index case.
+  - `/preprints` — surfaces arXiv / SSRN sources that have since appeared in a
+    peer-reviewed venue. A weekly launchd agent refreshes the cache in the
+    background; the **Check now** button forces a re-check. See
+    [Preprint publication tracking](#preprint-publication-tracking) below.
 - **Pause/resume the watcher** from the dashboard, or:
   ```sh
   touch ~/.config/claude-source-intake/paused      # pause
@@ -268,6 +277,50 @@ matched summary; you'll also see it in the dashboard's Duplicates section.
 To force re-processing of a file you really do want to re-summarize: delete
 the matched summary first, then move the file from `_duplicate/` back to the
 inbox.
+
+## Preprint publication tracking
+
+Many sources start as preprints on arXiv or SSRN and later appear in a
+peer-reviewed venue. The dashboard's `/preprints` page surfaces that
+promotion so you can decide whether to swap the source or fill in
+`superseded_by:`.
+
+**What it does:**
+
+- Walks the library for summaries whose `url:` lives on `arxiv.org` or
+  `ssrn.com`, or whose `source_type:` is `preprint` (also catches
+  `publication:` strings that start with "arXiv" / "SSRN" / "preprint").
+- For each one, queries [OpenAlex](https://openalex.org) by title (with an
+  arXiv-id cross-validation when available) and inspects the matched work's
+  `locations[]` for a non-repository, non-preprint-server version.
+- Caches results in `~/.config/claude-source-intake/preprint-checks.json`.
+  Entries are refreshed when older than 7 days (override:
+  `PREPRINT_REFRESH_DAYS`).
+
+**How to use it:**
+
+- The `/preprints` page lists results in four buckets — *Likely published*,
+  *Preprint-only*, *Unknown*, *Errors* — with a confidence rating on each
+  published hit. A weekly launchd cron (Monday 03:15) keeps the cache fresh
+  in the background. Click **Check now** to force an immediate re-check.
+- Findings are **never auto-written** to summary frontmatter. OpenAlex's
+  coverage of CS/ML is patchy and title-search has inherent false-positive
+  risk, so the page surfaces matches for your review — you decide whether to
+  update `superseded_by:` or replace the source entirely.
+
+**Be a good OpenAlex citizen:** set `OPENALEX_EMAIL=you@example.com` in
+`.env`. That opts the check into OpenAlex's "polite pool" with a higher rate
+limit and friendlier 503 behavior. Without it, the API still works but is
+treated as anonymous and may throttle on libraries with many preprints.
+
+You can also run the check manually:
+
+```sh
+LIBRARY_PATH=$LIBRARY ~/.config/claude-source-intake/venv/bin/python \
+  scripts/check-preprints.py            # refresh stale entries
+  # --force                             # re-check everything
+  # --rel-path foo/bar.summary.md       # check one source by path
+```
 
 ### Backfilling existing summaries
 
@@ -356,10 +409,12 @@ source-intake-agent/
 │   ├── worker.sh
 │   ├── dashboard.py
 │   ├── regen-index.py
+│   ├── check-preprints.py    ← OpenAlex lookup for arXiv/SSRN promotion
 │   └── backfill-hashes.py    ← one-shot: add source_hash to existing summaries
 ├── launchd/
 │   ├── worker.plist.template
-│   └── dashboard.plist.template
+│   ├── dashboard.plist.template
+│   └── preprint-check.plist.template      (weekly cron, Mon 03:15)
 └── config/
     └── prompt.txt               ← default autonomy prompt; __LIBRARY__ token
                                     is substituted on first install

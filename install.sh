@@ -31,6 +31,8 @@ Configuration (lowest to highest precedence):
   LABEL_PREFIX=com.user                plist label prefix
   CLAUDE_BIN=\$(command -v claude)      claude CLI binary
   CATEGORY_ORDER=                      optional, comma-separated category sort
+  OPENALEX_EMAIL=                      optional, opts the weekly preprint
+                                       check into OpenAlex's polite pool
 USAGE
       exit 0 ;;
     *) echo "unknown arg: $arg" >&2; exit 2 ;;
@@ -54,6 +56,7 @@ LABEL_PREFIX="${LABEL_PREFIX:-com.user}"
 CLAUDE_BIN="${CLAUDE_BIN:-$(command -v claude || true)}"
 CATEGORY_ORDER="${CATEGORY_ORDER:-}"
 DOMAIN="${DOMAIN:-A general-purpose personal research library.}"
+OPENALEX_EMAIL="${OPENALEX_EMAIL:-}"
 
 # Expand leading "~/" since shell parameter expansion doesn't.
 expand_tilde() { printf '%s' "${1/#\~\//$HOME/}"; }
@@ -66,6 +69,7 @@ PLISTS_DIR="$HOME/Library/LaunchAgents"
 
 WORKER_LABEL="${LABEL_PREFIX}.claude-source-intake"
 DASHBOARD_LABEL="${LABEL_PREFIX}.claude-source-intake-ui"
+PREPRINT_LABEL="${LABEL_PREFIX}.claude-source-intake-preprint-check"
 
 say() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m!!\033[0m %s\n' "$*" >&2; }
@@ -110,9 +114,10 @@ deploy_script() {
 say "Deploying scripts to $SCRIPTS_DIR..."
 # Repo files are tracked +x in git; `install -m 0755` and symlink mode both
 # ensure the deployed paths end up executable without modifying the repo.
-deploy_script "$REPO_ROOT/scripts/worker.sh"      "$SCRIPTS_DIR/claude-source-intake.sh"
-deploy_script "$REPO_ROOT/scripts/dashboard.py"   "$SCRIPTS_DIR/claude-source-intake-ui.py"
-deploy_script "$REPO_ROOT/scripts/regen-index.py" "$SCRIPTS_DIR/claude-source-intake-regen-index.py"
+deploy_script "$REPO_ROOT/scripts/worker.sh"          "$SCRIPTS_DIR/claude-source-intake.sh"
+deploy_script "$REPO_ROOT/scripts/dashboard.py"       "$SCRIPTS_DIR/claude-source-intake-ui.py"
+deploy_script "$REPO_ROOT/scripts/regen-index.py"     "$SCRIPTS_DIR/claude-source-intake-regen-index.py"
+deploy_script "$REPO_ROOT/scripts/check-preprints.py" "$SCRIPTS_DIR/claude-source-intake-check-preprints.py"
 
 # Enforce 0600 on the API key file if it already exists. The README tells
 # the user to chmod 600 themselves, but it's the kind of thing that drifts;
@@ -148,12 +153,14 @@ render_plist() {
       -e "s|__LABEL_PREFIX__|${LABEL_PREFIX}|g" \
       -e "s|__CATEGORY_ORDER__|${CATEGORY_ORDER}|g" \
       -e "s|__DOMAIN__|${domain_esc}|g" \
+      -e "s|__OPENALEX_EMAIL__|${OPENALEX_EMAIL}|g" \
       "$src" > "$dest"
   plutil -lint "$dest" >/dev/null
 }
 say "Rendering launchd plists..."
-render_plist "$REPO_ROOT/launchd/worker.plist.template"    "$PLISTS_DIR/$WORKER_LABEL.plist"
-render_plist "$REPO_ROOT/launchd/dashboard.plist.template" "$PLISTS_DIR/$DASHBOARD_LABEL.plist"
+render_plist "$REPO_ROOT/launchd/worker.plist.template"          "$PLISTS_DIR/$WORKER_LABEL.plist"
+render_plist "$REPO_ROOT/launchd/dashboard.plist.template"       "$PLISTS_DIR/$DASHBOARD_LABEL.plist"
+render_plist "$REPO_ROOT/launchd/preprint-check.plist.template"  "$PLISTS_DIR/$PREPRINT_LABEL.plist"
 
 # --- (Re)load launchd agents --------------------------------------------------
 UID_NUM="$(id -u)"
@@ -168,6 +175,7 @@ reload_agent() {
 say "Loading launchd agents..."
 reload_agent "$WORKER_LABEL"
 reload_agent "$DASHBOARD_LABEL"
+reload_agent "$PREPRINT_LABEL"
 
 # --- Summary ------------------------------------------------------------------
 echo

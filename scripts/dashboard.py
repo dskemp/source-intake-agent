@@ -31,6 +31,8 @@ WORKER_OUT_LOG = "/tmp/claude-source-intake.out.log"
 WORKER_ERR_LOG = "/tmp/claude-source-intake.err.log"
 WORKER = HOME / "Library/Scripts/claude-source-intake.sh"
 REGEN_INDEX = HOME / "Library/Scripts/claude-source-intake-regen-index.py"
+CHECK_PREPRINTS = HOME / "Library/Scripts/claude-source-intake-check-preprints.py"
+PREPRINT_CACHE = CONFIG / "preprint-checks.json"
 VENV_PYTHON = CONFIG / "venv/bin/python"
 
 PORT = int(os.environ.get("DASHBOARD_PORT", "7341"))
@@ -321,6 +323,39 @@ def audit_library():
     return findings
 
 
+def load_preprint_cache() -> dict:
+    if not PREPRINT_CACHE.exists():
+        return {}
+    try:
+        return json.loads(PREPRINT_CACHE.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def check_preprints_now(timeout: int = 600) -> tuple[bool, str]:
+    """Invoke the deployed check-preprints script via the worker venv.
+
+    Runs synchronously so the dashboard can flash success/failure. Network
+    calls go to OpenAlex; the script paces itself but a large library can
+    still take a minute or two.
+    """
+    if not CHECK_PREPRINTS.exists():
+        return False, f"check-preprints script not found at {CHECK_PREPRINTS}"
+    if not VENV_PYTHON.exists():
+        return False, f"venv python not found at {VENV_PYTHON}"
+    env = {**os.environ, "LIBRARY_PATH": str(LIBRARY)}
+    try:
+        r = subprocess.run(
+            [str(VENV_PYTHON), str(CHECK_PREPRINTS)],
+            capture_output=True, text=True, timeout=timeout, env=env,
+        )
+    except subprocess.SubprocessError as e:
+        return False, f"check-preprints failed: {e}"
+    if r.returncode != 0:
+        return False, (r.stderr or r.stdout or "check-preprints returned non-zero").strip()
+    return True, (r.stdout or "preprint check complete").strip()
+
+
 def regen_index_now(timeout: int = 30) -> tuple[bool, str]:
     """Invoke the deployed regen-index.py via the worker venv.
 
@@ -595,9 +630,11 @@ def nav_html(active: str) -> str:
     home_class = ' class="active"' if active == "home" else ""
     lib_class = ' class="active"' if active == "library" else ""
     audit_class = ' class="active"' if active == "audit" else ""
+    preprints_class = ' class="active"' if active == "preprints" else ""
     return f"""<nav class="topnav">
   <a href="/"{home_class}>Source Intake</a>
   <a href="/library"{lib_class}>Library</a>
+  <a href="/preprints"{preprints_class}>Preprints</a>
   <a href="/audit"{audit_class}>Audit</a>
 </nav>"""
 
@@ -1320,6 +1357,282 @@ def save_prompt():
     return redirect("/?flash=Prompt+saved")
 
 
+PREPRINTS_TEMPLATE = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Preprint check</title>
+{{ font_link | safe }}
+{{ shared_styles | safe }}
+<style>
+  body { max-width: 1200px; }
+  .summary-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: var(--space-3); margin: var(--space-4) 0 var(--space-6); }
+  .tile { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: var(--space-4); box-shadow: var(--shadow-1); }
+  .tile .n { font-family: var(--font-ui); font-size: 1.8rem; font-weight: 600; color: var(--color-primary); line-height: 1.1; }
+  .tile.ok .n { color: var(--color-success-700); }
+  .tile.warn .n { color: var(--color-warning-700); }
+  .tile.bad .n { color: var(--color-error-700); }
+  .tile .label { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-text-faint); font-weight: 600; margin-top: var(--space-1); }
+  .conf-high { color: var(--color-success-700); font-weight: 600; }
+  .conf-medium { color: var(--color-warning-700); font-weight: 600; }
+  .conf-low { color: var(--color-error-700); font-weight: 600; }
+  .venue { font-style: italic; }
+  .note { color: var(--color-text-faint); font-size: 0.85rem; }
+</style>
+</head>
+<body>
+{{ nav | safe }}
+<h1>Preprint check <span class="h-suffix">— peer-review tracking for arXiv / SSRN sources</span></h1>
+<p class="tagline">For each preprint in the library, checks OpenAlex weekly for a peer-reviewed version. Conservative by design: low/medium confidence findings are flagged for your review, not auto-applied.</p>
+
+{% if flash %}<div class="flash">{{ flash }}</div>{% endif %}
+
+<div class="strip">
+  <span class="mute">{% if last_checked %}Most recent check: {{ last_checked }}{% else %}Not yet run.{% endif %}</span>
+  <span class="grow"></span>
+  <form method="post" action="/check-preprints"><button class="primary">Check now</button></form>
+</div>
+<p class="mute" style="margin-top:.5rem;font-size:.85rem">A weekly launchd agent refreshes stale entries automatically. "Check now" re-checks anything older than {{ refresh_days }} days. Network calls to OpenAlex; large libraries may take a minute.</p>
+
+<div class="summary-tiles">
+  <div class="tile ok">
+    <div class="n">{{ stats.total }}</div>
+    <div class="label">Preprints tracked</div>
+  </div>
+  <div class="tile {% if stats.published %}warn{% else %}ok{% endif %}">
+    <div class="n">{{ stats.published }}</div>
+    <div class="label">Likely published</div>
+  </div>
+  <div class="tile ok">
+    <div class="n">{{ stats.preprint_only }}</div>
+    <div class="label">Preprint-only</div>
+  </div>
+  <div class="tile">
+    <div class="n">{{ stats.unknown }}</div>
+    <div class="label">Unknown</div>
+  </div>
+  <div class="tile {% if stats.errors %}bad{% else %}ok{% endif %}">
+    <div class="n">{{ stats.errors }}</div>
+    <div class="label">Errors</div>
+  </div>
+  <div class="tile {% if stats.unchecked %}warn{% else %}ok{% endif %}">
+    <div class="n">{{ stats.unchecked }}</div>
+    <div class="label">Not yet checked</div>
+  </div>
+</div>
+
+{% if not entries %}
+<p class="empty">No preprints in the library yet. The check picks up summaries whose URL is on <code>arxiv.org</code> or <code>ssrn.com</code>, or whose <code>source_type:</code> is <code>preprint</code>.</p>
+{% else %}
+
+{% if published %}
+<section class="issue-section">
+  <h2>Likely published <span class="h-suffix">— {{ published|length }} — review and consider updating <code>superseded_by:</code></span></h2>
+  <p class="note">When a preprint also appears in a peer-reviewed venue, OpenAlex usually has both. Confidence reflects how well we matched titles + arXiv ids. Click through to verify before treating any single hit as canonical — OpenAlex's data for CS/ML is patchy.</p>
+  <table>
+    <thead><tr><th style="width:24%">Preprint</th><th>Found at</th><th style="width:7rem">Conf.</th><th style="width:9rem">Checked</th></tr></thead>
+    <tbody>
+      {% for e in published %}
+      <tr>
+        <td>
+          <div class="title"><a href="/source/{{ e.rel_path|urlencode }}">{{ e.title }}</a></div>
+          <div class="meta">
+            {% if e.preprint_url %}<a href="{{ e.preprint_url }}" target="_blank" rel="noopener">{{ e.preprint_venue }} ↗</a>{% else %}{{ e.preprint_venue }}{% endif %}
+            {% if e.preprint_id %} · <code>{{ e.preprint_id }}</code>{% endif %}
+          </div>
+        </td>
+        <td>
+          <div><span class="venue">{{ e.publication }}</span> <span class="mute">({{ e.venue_type }}{% if e.version %} · {{ e.version }}{% endif %})</span></div>
+          <div class="meta">
+            {% if e.published_url %}<a href="{{ e.published_url }}" target="_blank" rel="noopener">{{ e.published_url }} ↗</a>{% endif %}
+            {% if e.doi %} · DOI <code>{{ e.doi }}</code>{% endif %}
+          </div>
+        </td>
+        <td><span class="conf-{{ e.confidence or 'low' }}">{{ (e.confidence or 'low')|capitalize }}</span>{% if e.match_score %} <span class="mute">{{ '%.2f'|format(e.match_score) }}</span>{% endif %}</td>
+        <td class="mute">{{ e.checked_ago }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+{% if unknown %}
+<section class="issue-section">
+  <h2>Unknown <span class="h-suffix">— {{ unknown|length }} — not indexed or no high-confidence match</span></h2>
+  <p class="note">OpenAlex returned no match (or none that cleared the title-similarity + author cross-check threshold). Worth a manual look if the source is recent or in a non-mainstream venue.</p>
+  <table>
+    <thead><tr><th>Preprint</th><th>Note</th><th style="width:9rem">Checked</th></tr></thead>
+    <tbody>
+      {% for e in unknown %}
+      <tr>
+        <td>
+          <div class="title"><a href="/source/{{ e.rel_path|urlencode }}">{{ e.title }}</a></div>
+          <div class="meta">{% if e.preprint_url %}<a href="{{ e.preprint_url }}" target="_blank" rel="noopener">{{ e.preprint_venue }} ↗</a>{% else %}{{ e.preprint_venue }}{% endif %}{% if e.preprint_id %} · <code>{{ e.preprint_id }}</code>{% endif %}</div>
+        </td>
+        <td class="note">{{ e.note or '—' }}</td>
+        <td class="mute">{{ e.checked_ago }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+{% if errors %}
+<section class="issue-section">
+  <h2>Errors <span class="h-suffix">— {{ errors|length }}</span></h2>
+  <p class="note">Transient network or API failures — they'll retry on the next check.</p>
+  <table>
+    <thead><tr><th>Preprint</th><th>Error</th><th style="width:9rem">Checked</th></tr></thead>
+    <tbody>
+      {% for e in errors %}
+      <tr>
+        <td><a href="/source/{{ e.rel_path|urlencode }}">{{ e.title }}</a></td>
+        <td class="note">{{ e.error }}</td>
+        <td class="mute">{{ e.checked_ago }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+<details class="settings" style="margin-top:2rem">
+  <summary>Preprint-only ({{ preprint_only|length }})</summary>
+  <p class="note">Found in OpenAlex but with no peer-reviewed location — i.e. the preprint hasn't been published yet (or OpenAlex hasn't indexed the published version).</p>
+  <table style="margin-top:1rem">
+    <thead><tr><th>Preprint</th><th>Venue</th><th style="width:9rem">Checked</th></tr></thead>
+    <tbody>
+      {% for e in preprint_only %}
+      <tr>
+        <td><a href="/source/{{ e.rel_path|urlencode }}">{{ e.title }}</a></td>
+        <td>{% if e.preprint_url %}<a href="{{ e.preprint_url }}" target="_blank" rel="noopener">{{ e.preprint_venue }} ↗</a>{% else %}{{ e.preprint_venue }}{% endif %}{% if e.preprint_id %} · <code>{{ e.preprint_id }}</code>{% endif %}</td>
+        <td class="mute">{{ e.checked_ago }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</details>
+
+{% if unchecked %}
+<details class="settings">
+  <summary>Not yet checked ({{ unchecked|length }})</summary>
+  <p class="note">Detected in the library but not yet in the cache. The next "Check now" or weekly run will pick them up.</p>
+  <ul>
+    {% for e in unchecked %}
+    <li><a href="/source/{{ e.rel_path|urlencode }}">{{ e.rel_path }}</a></li>
+    {% endfor %}
+  </ul>
+</details>
+{% endif %}
+
+{% endif %}
+
+</body>
+</html>"""
+
+
+def preprint_view_data():
+    """Read the cache and group entries by status for template rendering.
+
+    Also detects library preprints that aren't in the cache yet (new since the
+    last check) so we can show an "unchecked" bucket. Detection mirrors
+    scripts/check-preprints.py's classify() — we don't re-import to keep the
+    dashboard process free of network code, just duplicate the simple regex.
+    """
+    cache = load_preprint_cache()
+    discovered_rels: set[str] = set()
+    if LIBRARY.exists():
+        for summary in LIBRARY.glob("*/*/*.summary.md"):
+            category = summary.parent.parent.name
+            if category.startswith(".") or category.startswith("_"):
+                continue
+            fm = parse_frontmatter(summary)
+            if fm is None:
+                continue
+            url = (fm.get("url") or "").lower()
+            source_type = (fm.get("source_type") or "").lower()
+            publication = (fm.get("publication") or "").lower()
+            looks_preprint = (
+                "arxiv.org" in url or "ssrn.com" in url
+                or source_type == "preprint"
+                or publication.startswith(("arxiv", "ssrn", "preprint"))
+            )
+            if looks_preprint:
+                discovered_rels.add(summary.relative_to(LIBRARY).as_posix())
+
+    now = time.time()
+
+    def fmt_ago(ts_str: str) -> str:
+        if not ts_str:
+            return "—"
+        try:
+            t = time.mktime(time.strptime(ts_str, "%Y-%m-%dT%H:%M:%SZ"))
+        except ValueError:
+            return ts_str
+        delta = now - t
+        if delta < 60:
+            return "just now"
+        if delta < 3600:
+            return f"{int(delta // 60)}m ago"
+        if delta < 86400:
+            return f"{int(delta // 3600)}h ago"
+        return f"{int(delta // 86400)}d ago"
+
+    entries = []
+    for rel, v in cache.items():
+        entries.append({
+            "rel_path": rel,
+            "title": v.get("title") or rel,
+            "preprint_venue": v.get("preprint_venue") or "",
+            "preprint_id": v.get("preprint_id") or "",
+            "preprint_url": v.get("preprint_url") or "",
+            "status": v.get("status") or "unknown",
+            "publication": v.get("publication") or "",
+            "venue_type": v.get("venue_type") or "",
+            "version": v.get("version") or "",
+            "published_url": v.get("published_url") or "",
+            "doi": v.get("doi") or "",
+            "confidence": v.get("confidence") or "",
+            "match_score": v.get("match_score") or 0,
+            "note": v.get("note") or "",
+            "error": v.get("error") or "",
+            "checked_at": v.get("checked_at") or "",
+            "checked_ago": fmt_ago(v.get("checked_at") or ""),
+        })
+    entries.sort(key=lambda e: (e["status"] != "published", e["title"].lower()))
+    published = [e for e in entries if e["status"] == "published"]
+    preprint_only = [e for e in entries if e["status"] == "preprint-only"]
+    unknown = [e for e in entries if e["status"] == "unknown"]
+    errors = [e for e in entries if e["status"] == "error"]
+    unchecked = [
+        {"rel_path": rel} for rel in sorted(discovered_rels - set(cache.keys()))
+    ]
+    last_checked_ts = max(
+        (e["checked_at"] for e in entries if e["checked_at"]), default=""
+    )
+    last_checked = fmt_ago(last_checked_ts) if last_checked_ts else ""
+    stats = {
+        "total": len(entries) + len(unchecked),
+        "published": len(published),
+        "preprint_only": len(preprint_only),
+        "unknown": len(unknown),
+        "errors": len(errors),
+        "unchecked": len(unchecked),
+    }
+    return {
+        "entries": entries,
+        "published": published,
+        "preprint_only": preprint_only,
+        "unknown": unknown,
+        "errors": errors,
+        "unchecked": unchecked,
+        "stats": stats,
+        "last_checked": last_checked,
+    }
+
+
 AUDIT_TEMPLATE = """<!doctype html>
 <html lang="en">
 <head>
@@ -1486,6 +1799,28 @@ AUDIT_TEMPLATE = """<!doctype html>
 {% endif %}
 </body>
 </html>"""
+
+
+@app.route("/preprints")
+def preprints_view():
+    data = preprint_view_data()
+    return render_template_string(
+        PREPRINTS_TEMPLATE,
+        **data,
+        refresh_days=int(os.environ.get("PREPRINT_REFRESH_DAYS", "7")),
+        nav=nav_html("preprints"),
+        font_link=FONT_LINK,
+        shared_styles=SHARED_STYLES,
+        flash=request.args.get("flash", ""),
+    )
+
+
+@app.route("/check-preprints", methods=["POST"])
+def check_preprints_route():
+    ok, msg = check_preprints_now()
+    flash = ("Preprint check complete: " if ok else "Preprint check failed: ") + msg
+    safe = flash.replace("&", "and").replace("#", "")
+    return redirect(f"/preprints?flash={safe}")
 
 
 @app.route("/audit")
