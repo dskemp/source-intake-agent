@@ -338,6 +338,7 @@ for path in "$INBOX"/*; do
   # archived preprint's category folder (see "promote" branch below).
   is_promotion=0
   promote_target_dir=""
+  promote_category_dir=""
   promote_preprint_rel=""
 
   # --- Dedup check ----------------------------------------------------------
@@ -483,6 +484,11 @@ PY
       log "promoting '$base' over preprint $preprint_summary (archived to $archive_dir)"
       is_promotion=1
       promote_target_dir="$preprint_dir"
+      # The produced summary's directory will be renamed to match the published
+      # slug (canonical winner), so we relocate into <category>/<produced-slug>/
+      # rather than into the preprint's own slug dir. promote_target_dir is
+      # retained for the failure-restore path below.
+      promote_category_dir="$(dirname "$preprint_dir")"
       promote_preprint_rel="$preprint_rel"
       # Fall through to normal intake below — do NOT `continue`.
     else
@@ -650,28 +656,47 @@ print(template.replace("<STAGED_PATH>", sys.argv[2]).replace("<DOMAIN>", domain)
           fi
         fi
       fi
-      # Promotion: relocate the produced summary (and its filed PDF) into the
-      # archived preprint's category folder so it inherits that library slot.
-      if (( is_promotion )) && [[ -n "$promote_target_dir" ]]; then
+      # Promotion: relocate the entire produced folder into the preprint's
+      # category as <category>/<produced-slug>/ so the directory name matches
+      # the produced summary's filename (slug == dirname invariant). We move
+      # the folder as a unit, which carries the summary + PDF (+ snapshot if
+      # any) along atomically. The original preprint's empty slug dir is
+      # rmdir'd after the loop completes.
+      if (( is_promotion )) && [[ -n "$promote_category_dir" ]]; then
         produced_folder=$(dirname "$produced_path")
-        if [[ "$produced_folder" != "$promote_target_dir" ]]; then
-          mkdir -p "$promote_target_dir"
-          produced_slug=$(basename "$produced_path" .summary.md)
-          if mv "$produced_path" "$promote_target_dir/" 2>/dev/null; then
-            log "  promoted summary -> $promote_target_dir/$(basename "$produced_path")"
-            # Replace the path in produced_list so append_run logs the final
-            # location, not the intermediate one.
-            sed -i.bak "s|^${produced_path}$|${promote_target_dir}/$(basename "$produced_path")|" "$produced_list" 2>/dev/null && rm -f "${produced_list}.bak"
+        produced_slug=$(basename "$produced_path" .summary.md)
+        final_dir="$promote_category_dir/$produced_slug"
+        if [[ "$produced_folder" != "$final_dir" ]]; then
+          if [[ -e "$final_dir" ]]; then
+            # Should not happen: dedup would have fired if the published slug
+            # already had a slot. Log and leave the produced folder in place
+            # rather than corrupting the existing dir with a nested move.
+            log "  WARNING: cannot promote into $final_dir (already exists); leaving in $produced_folder"
           else
-            log "  WARNING: failed to move produced summary into $promote_target_dir"
-          fi
-          if (( is_pdf )) && [[ -f "$produced_folder/$produced_slug.pdf" ]]; then
-            mv "$produced_folder/$produced_slug.pdf" "$promote_target_dir/" 2>/dev/null || \
-              log "  WARNING: failed to move filed PDF into $promote_target_dir"
+            mkdir -p "$promote_category_dir"
+            if mv "$produced_folder" "$final_dir" 2>/dev/null; then
+              log "  promoted folder -> $final_dir"
+              new_produced_path="$final_dir/$produced_slug.summary.md"
+              # Update produced_list so append_run logs the final location.
+              sed -i.bak "s|^${produced_path}$|${new_produced_path}|" "$produced_list" 2>/dev/null && rm -f "${produced_list}.bak"
+            else
+              log "  WARNING: failed to move $produced_folder to $final_dir"
+            fi
           fi
         fi
       fi
     done < "$produced_list"
+    # Promotion cleanup: the preprint's original slug dir was emptied at
+    # detect-time (summary/PDF/snapshot moved to _promoted/) and the produced
+    # folder has now been relocated to <category>/<produced-slug>/. rmdir the
+    # leftover empty preprint dir so the library doesn't accumulate orphans.
+    if (( is_promotion )) && [[ -n "$promote_target_dir" ]] && [[ -d "$promote_target_dir" ]]; then
+      if rmdir "$promote_target_dir" 2>/dev/null; then
+        log "  cleaned up empty preprint dir: $promote_target_dir"
+      else
+        log "  NOTE: $promote_target_dir not empty after promotion; leaving in place"
+      fi
+    fi
     rm -f "$staged_path"
     outcome="success"
     (( is_promotion )) && outcome="promoted"
