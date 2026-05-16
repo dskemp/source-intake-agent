@@ -508,6 +508,9 @@ SHARED_STYLES = """<style>
   --color-warning-700:    #BF360C;
   --color-warning-600:    #E65100;
   --color-warning-100:    #FFF3E0;
+  --color-info-700:       #0D47A1;
+  --color-info-600:       #1565C0;
+  --color-info-100:       #E3F2FD;
   --font-ui:    'Libre Franklin', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   --font-body:  'Libre Baskerville', Charter, Georgia, serif;
   --font-mono:  'SF Mono', 'Cascadia Code', 'Fira Code', Consolas, 'Liberation Mono', monospace;
@@ -550,6 +553,7 @@ td.actions { text-align: right; white-space: nowrap; }
 .badge.ok { background: var(--color-success-100); color: var(--color-success-700); }
 .badge.bad { background: var(--color-error-100); color: var(--color-error-700); }
 .badge.dup { background: var(--color-warning-100); color: var(--color-warning-700); }
+.badge.info { background: var(--color-info-100); color: var(--color-info-700); }
 .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; }
 .dot.ok { background: var(--color-success-600); }
 .dot.paused { background: var(--color-warning-600); }
@@ -668,6 +672,7 @@ TEMPLATE = """<!doctype html>
       <td>
         {% if r.outcome == 'success' %}<span class="badge ok">success</span>
         {% elif r.outcome == 'duplicate' %}<span class="badge dup">duplicate</span>
+        {% elif r.outcome == 'backfill' %}<span class="badge info">backfill</span>
         {% else %}<span class="badge bad">failure</span>{% endif %}
       </td>
       <td class="mute">{% if r.cost_usd %}${{ '%.3f'|format(r.cost_usd) }}{% else %}—{% endif %}</td>
@@ -1419,7 +1424,7 @@ AUDIT_TEMPLATE = """<!doctype html>
 {% if findings.missing_originals %}
 <section class="issue-section">
   <h2>Missing originals <span class="h-suffix">— {{ findings.missing_originals|length }}</span></h2>
-  <p class="desc">Summaries that have no sibling <code>.pdf</code> or <code>.snapshot.md</code>. The summary alone is fine to keep, but you've lost the source artifact. If that's not intended, delete the summary and re-process from the inbox.</p>
+  <p class="desc">Summaries that have no sibling <code>.pdf</code> or <code>.snapshot.md</code>. The summary alone is fine to keep, but you've lost the source artifact. To restore: drop a PDF in the inbox &mdash; if its filename matches the summary's slug, title, or URL (e.g. an arxiv ID), the worker files it back in place instead of treating it as a new source. Otherwise, delete the summary and re-process from the inbox.</p>
   <table>
     <thead><tr><th>Title</th><th>Category</th><th>Path</th><th class="actions">Actions</th></tr></thead>
     <tbody>

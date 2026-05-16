@@ -48,13 +48,18 @@ fi
 
 log() { echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*"; }
 
-# Dedup check. Echoes "<matched-summary-path>\t<reason>" if input duplicates an
-# existing source (by sha256 of bytes, or by URL for .txt/.url inputs).
-# Empty output = not a duplicate.
+# Dedup check. Echoes "<matched-summary-path>\t<reason>" where reason is one of:
+#   hash | url              — duplicate of an existing source (move to _duplicate/)
+#   backfill:hash           — same bytes as an existing summary whose .pdf is missing
+#   backfill:url            — same URL as an existing summary whose .pdf is missing
+#   backfill:fuzzy          — input PDF filename strongly matches a missing-original
+#                             summary's slug/title (last-ditch repair signal)
+# Empty output = not a duplicate; proceed with normal intake.
 check_dedup() {
   local input_path="$1"
   "$PYTHON" - "$LIBRARY" "$input_path" <<'PY'
 import hashlib, re, sys
+from difflib import SequenceMatcher
 from pathlib import Path
 import yaml
 
@@ -77,6 +82,21 @@ if input_path.suffix.lower() in ('.txt', '.url'):
     except Exception:
         pass
 
+is_pdf = input_path.suffix.lower() == '.pdf'
+
+def has_original(summary_path):
+    slug = summary_path.name[: -len('.summary.md')]
+    return (summary_path.parent / f"{slug}.pdf").exists() or \
+           (summary_path.parent / f"{slug}.snapshot.md").exists()
+
+def normalize(s):
+    s = (s or "").lower()
+    s = re.sub(r"[^a-z0-9]+", " ", s)
+    return " ".join(s.split())
+
+input_name_norm = normalize(input_path.stem)
+fuzzy_candidates = []  # (summary_path, slug_norm, title_norm)
+
 for summary in Path(library).glob('*/*/*.summary.md'):
     try:
         text = summary.read_text()
@@ -92,11 +112,58 @@ for summary in Path(library).glob('*/*/*.summary.md'):
     except yaml.YAMLError:
         continue
     if input_hash and fm.get('source_hash') == input_hash:
-        print(f"{summary}\thash")
+        reason = 'backfill:hash' if (is_pdf and not has_original(summary)) else 'hash'
+        print(f"{summary}\t{reason}")
         sys.exit(0)
     if input_url and fm.get('url') == input_url:
-        print(f"{summary}\turl")
+        reason = 'backfill:url' if (is_pdf and not has_original(summary)) else 'url'
+        print(f"{summary}\t{reason}")
         sys.exit(0)
+    if is_pdf and not has_original(summary):
+        slug = summary.name[: -len('.summary.md')]
+        # Arxiv IDs (NNNN.NNNNN) in the summary's URL are nearly unique, so
+        # we surface them as a strong-signal match against the raw filename.
+        url_ids = re.findall(r'\b\d{4}\.\d{4,5}\b', str(fm.get('url') or ''))
+        fuzzy_candidates.append((
+            summary,
+            normalize(slug),
+            normalize(fm.get('title') or ''),
+            url_ids,
+        ))
+
+# Fuzzy backfill: only PDF inputs, only against summaries known to be missing
+# their original. Score is the max of slug- and title-similarity, lifted to 0.85
+# on substring containment and boosted +0.10 when a year in the slug also
+# appears in the input filename. Require top >= 0.70 AND a >= 0.15 margin over
+# the runner-up so an ambiguous pile of candidates declines to guess.
+if is_pdf and fuzzy_candidates:
+    input_name_raw = input_path.stem  # for arxiv-id substring check (case-sensitive ids)
+    def score(slug_norm, title_norm, url_ids):
+        # Arxiv ID hit on the raw filename is decisive — IDs are unique, so a
+        # match here outweighs whatever fuzzy strings say.
+        for uid in url_ids:
+            if uid in input_name_raw:
+                return 0.95
+        s1 = SequenceMatcher(None, input_name_norm, slug_norm).ratio() if slug_norm else 0
+        s2 = SequenceMatcher(None, input_name_norm, title_norm).ratio() if title_norm else 0
+        sc = max(s1, s2)
+        if slug_norm and (slug_norm in input_name_norm or input_name_norm in slug_norm):
+            sc = max(sc, 0.85)
+        if title_norm and (title_norm in input_name_norm or input_name_norm in title_norm):
+            sc = max(sc, 0.85)
+        ym = re.search(r'\b(19|20)\d{2}\b', slug_norm)
+        if ym and ym.group(0) in input_name_norm:
+            sc += 0.10
+        return min(sc, 1.0)
+    scored = sorted(
+        ((score(s, t, u), p) for p, s, t, u in fuzzy_candidates),
+        key=lambda x: x[0],
+        reverse=True,
+    )
+    top_score, top_summary = scored[0]
+    second_score = scored[1][0] if len(scored) > 1 else 0.0
+    if top_score >= 0.70 and (top_score - second_score) >= 0.15:
+        print(f"{top_summary}\tbackfill:fuzzy")
 PY
 }
 
@@ -253,6 +320,41 @@ for path in "$INBOX"/*; do
   if [[ -n "$dedup_result" ]]; then
     matched_path="${dedup_result%%$'\t'*}"
     matched_reason="${dedup_result##*$'\t'}"
+
+    # Backfill: matched summary is missing its source artifact and the input is
+    # a PDF that hash/URL/title-matches it. File the PDF in place of running
+    # the full intake — the summary is already correct.
+    if [[ "$matched_reason" == backfill:* ]]; then
+      backfill_kind="${matched_reason#backfill:}"
+      summary_dir=$(dirname "$matched_path")
+      summary_base=$(basename "$matched_path")
+      summary_slug="${summary_base%.summary.md}"
+      pdf_target="$summary_dir/$summary_slug.pdf"
+      if [[ -e "$pdf_target" ]]; then
+        # Race: PDF appeared since check_dedup looked. Leave the input in
+        # the inbox; next tick re-evaluates against the updated library state.
+        log "backfill skipped: $pdf_target already exists; leaving '$base' in inbox for next tick"
+        continue
+      fi
+      if ! mv "$path" "$pdf_target"; then
+        log "backfill failed: could not move '$base' to $pdf_target; leaving in inbox"
+        continue
+      fi
+      log "backfilled missing PDF for '$base' (matched by $backfill_kind) -> $pdf_target"
+      # Fuzzy matches don't carry a verified hash on the summary, so inject
+      # the filed PDF's hash to anchor future dedup. Hash/URL backfills
+      # already have the right value in frontmatter (it's how they matched).
+      if [[ "$backfill_kind" == fuzzy ]]; then
+        pdf_hash=$(file_sha256 "$pdf_target")
+        inject_hash "$matched_path" "$pdf_hash" || true
+      fi
+      bf_paths_file=$(mktemp -t intake-bf-paths)
+      printf '%s\n' "$matched_path" > "$bf_paths_file"
+      append_run "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$base" "backfill" "$bf_paths_file" "" ""
+      rm -f "$bf_paths_file"
+      continue
+    fi
+
     log "duplicate '$base' (matched by $matched_reason): $matched_path"
     dup_dest="$INBOX/_duplicate/$base"
     n=1
