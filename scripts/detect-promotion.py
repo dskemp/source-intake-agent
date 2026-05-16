@@ -49,7 +49,18 @@ def normalize_doi(doi: str) -> str:
         if doi.startswith(prefix):
             doi = doi[len(prefix):]
             break
-    return doi.rstrip(".,;)]>\"'").strip()
+    # Strip URL query/fragment that DOI_RE may have slurped on a landing URL.
+    for sep in ("?", "#"):
+        if sep in doi:
+            doi = doi.split(sep, 1)[0]
+    return doi.rstrip("/").rstrip(".,;)]>\"'").strip()
+
+
+def doi_from_url(url: str) -> str:
+    if not url:
+        return ""
+    m = DOI_RE.search(url)
+    return normalize_doi(m.group(0)) if m else ""
 
 
 def extract_doi_from_pdf(pdf_path: Path) -> str:
@@ -155,11 +166,30 @@ def published_entries(cache: dict) -> list[tuple[str, dict]]:
     return out
 
 
+def candidate_dois(entry: dict) -> set[str]:
+    """All DOIs a cache entry can be matched against.
+
+    OpenAlex returns the preprint-server DOI as the work's canonical `doi` for
+    SSRN/arXiv-registered works, so the journal DOI lives only in the chosen
+    location's `landing_page_url` (stored as `published_url`). Newer cache
+    entries also expose it as `published_doi`. Match against the full set.
+    """
+    dois: set[str] = set()
+    for key in ("doi", "published_doi"):
+        d = normalize_doi(entry.get(key) or "")
+        if d:
+            dois.add(d)
+    url_doi = doi_from_url(entry.get("published_url") or "")
+    if url_doi:
+        dois.add(url_doi)
+    return dois
+
+
 def match_by_doi(input_doi: str, candidates: list[tuple[str, dict]]) -> str | None:
     input_doi = normalize_doi(input_doi)
     if not input_doi:
         return None
-    hits = [rel for rel, entry in candidates if normalize_doi(entry.get("doi") or "") == input_doi]
+    hits = [rel for rel, entry in candidates if input_doi in candidate_dois(entry)]
     if len(hits) == 1:
         return hits[0]
     if len(hits) > 1:
@@ -175,10 +205,16 @@ def match_by_title(input_title: str, candidates: list[tuple[str, dict]]) -> str 
         return None
     scored = []
     for rel, entry in candidates:
-        published_title = entry.get("published_title") or ""
-        if not published_title:
+        # Prefer the journal title; fall back to the preprint summary title
+        # (often identical post-publication). Gate the fallback on
+        # `published_url` so we never match against a preprint title for an
+        # entry that wasn't actually confirmed published somewhere.
+        compare_title = entry.get("published_title") or ""
+        if not compare_title and entry.get("published_url"):
+            compare_title = entry.get("title") or ""
+        if not compare_title:
             continue
-        score = SequenceMatcher(None, norm, normalize_title(published_title)).ratio()
+        score = SequenceMatcher(None, norm, normalize_title(compare_title)).ratio()
         scored.append((score, rel))
     if not scored:
         return None
