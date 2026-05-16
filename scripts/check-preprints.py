@@ -223,7 +223,12 @@ def find_published_location(work: dict) -> dict | None:
         return None
     candidates.sort(key=lambda x: x[0], reverse=True)
     best = candidates[0][1]
-    return {**best, "doi": _clean_doi(work.get("doi"))}
+    published_title = (work.get("title") or work.get("display_name") or "").strip()
+    return {
+        **best,
+        "doi": _clean_doi(work.get("doi")),
+        "published_title": published_title,
+    }
 
 
 def _hit_arxiv_id(hit: dict) -> str | None:

@@ -36,7 +36,8 @@ $INBOX/                                ← drop files here
   ├── claude-source-intake.sh
   ├── claude-source-intake-ui.py
   ├── claude-source-intake-regen-index.py
-  └── claude-source-intake-check-preprints.py
+  ├── claude-source-intake-check-preprints.py
+  └── claude-source-intake-detect-promotion.py
 
 ~/Library/LaunchAgents/
   ├── <prefix>.claude-source-intake.plist                 (WatchPaths trigger)
@@ -168,6 +169,7 @@ you have a reason.
 | `RUN_LOG_KEEP` | `50` | Per-iteration stream-json archives kept under `$CONFIG/run-logs/`. |
 | `DASHBOARD_PORT` | `7341` | Localhost port the dashboard binds to. |
 | `PREPRINT_REFRESH_DAYS` | `7` | Preprint cache entries older than this are re-checked. Read by `check-preprints.py` and shown on `/preprints`. |
+| `PREPRINT_PROMOTION_MODE` | `auto` | How the worker handles a PDF that looks like the published version of a tracked preprint. `auto` archives the preprint and intakes the published PDF into its category slot. `stage` routes the PDF to `_promoted/_pending/` for manual review. `off` disables detection. |
 
 ## Keeping the repo and the running system in sync
 
@@ -206,6 +208,7 @@ What needs reloading after each kind of edit:
 | `scripts/dashboard.py` | `launchctl kickstart -k gui/$(id -u)/<prefix>.claude-source-intake-ui` |
 | `scripts/regen-index.py` | nothing — invoked fresh after each successful run |
 | `scripts/check-preprints.py` | nothing — invoked fresh by cron / dashboard |
+| `scripts/detect-promotion.py` | nothing — invoked fresh by the worker on each PDF drop |
 | `launchd/*.plist.template` | re-run `./install.sh` (re-renders + reloads agents) |
 | `config/prompt.txt` | doesn't auto-propagate — see note below |
 | `requirements.txt` | re-run `./install.sh` (re-runs pip install) |
@@ -306,7 +309,8 @@ promotion so you can decide whether to swap the source or fill in
 - Findings are **never auto-written** to summary frontmatter. OpenAlex's
   coverage of CS/ML is patchy and title-search has inherent false-positive
   risk, so the page surfaces matches for your review — you decide whether to
-  update `superseded_by:` or replace the source entirely.
+  update `superseded_by:` or replace the source entirely. See *Replacing a
+  preprint with its published version* below for the replace-in-place flow.
 
 **Be a good OpenAlex citizen:** set `OPENALEX_EMAIL=you@example.com` in
 `.env`. That opts the check into OpenAlex's "polite pool" with a higher rate
@@ -321,6 +325,44 @@ LIBRARY_PATH=$LIBRARY ~/.config/claude-source-intake/venv/bin/python \
   # --force                             # re-check everything
   # --rel-path foo/bar.summary.md       # check one source by path
 ```
+
+### Replacing a preprint with its published version
+
+When `/preprints` flags a "Likely published" hit and you've verified it's the
+same paper, drop the published-version PDF into the inbox — the worker
+auto-detects the promotion and swaps it in.
+
+**Workflow:**
+
+1. On `/preprints`, click the DOI / venue link for the candidate and confirm
+   it's the same paper.
+2. Download the published-version PDF from the publisher (or wherever you have
+   access).
+3. Move that PDF into the inbox like any other source.
+4. The worker tick:
+   - Extracts the DOI from the PDF (metadata + first-page text) and matches it
+     against the `preprint-checks.json` cache. A high-similarity title match
+     against the cached `published_title` is the fallback when no DOI can be
+     extracted.
+   - Archives the preprint's summary, sidecar PDF, and snapshot to
+     `$INBOX/_promoted/<timestamp>-<slug>/` along with a `promotion.txt` note
+     (recoverable; mirrors the `_failed/` and `_duplicate/` pattern).
+   - Removes the preprint's entry from `preprint-checks.json`.
+   - Runs normal intake on the published PDF, then moves the produced summary
+     and filed PDF into the preprint's original category folder so it inherits
+     that library slot.
+   - Logs the iteration to `runs.jsonl` with `outcome: "promoted"`.
+5. `INDEX.md` regenerates with the new entry; `/preprints` no longer lists the
+   old summary.
+
+**Failure safety:** if intake of the published PDF fails after the preprint is
+archived, the worker restores the preprint from the archive directory
+automatically (the failed PDF goes to `_failed/` for retry).
+
+**Tuning:** set `PREPRINT_PROMOTION_MODE=stage` to route promotion-candidate
+PDFs to `$INBOX/_promoted/_pending/` for manual review instead of acting
+automatically, or `PREPRINT_PROMOTION_MODE=off` to disable detection entirely
+and treat such PDFs as fresh sources.
 
 ### Backfilling existing summaries
 
@@ -410,6 +452,7 @@ source-intake-agent/
 │   ├── dashboard.py
 │   ├── regen-index.py
 │   ├── check-preprints.py    ← OpenAlex lookup for arXiv/SSRN promotion
+│   ├── detect-promotion.py   ← worker hook: match dropped PDF to a tracked preprint
 │   └── backfill-hashes.py    ← one-shot: add source_hash to existing summaries
 ├── launchd/
 │   ├── worker.plist.template
