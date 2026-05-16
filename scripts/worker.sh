@@ -306,11 +306,24 @@ for path in "$INBOX"/*; do
   base=$(basename "$path")
   [[ "$base" == .* ]] && continue
 
+  # File-too-new guard: a file still being written has a recent mtime, and
+  # processing it mid-copy yields a truncated read. We can't just skip — the
+  # launchd plist uses WatchPaths only (no StartInterval), so if we exit here
+  # nothing re-fires and the file stays stuck. Wait until the file ages past
+  # the threshold, then re-check mtime to confirm it's no longer being
+  # written. If mtime moved during the wait the writer is still active, so
+  # punt (next directory event will retrigger us).
   mtime=$(stat -f %m "$path")
-  age=$((NOW - mtime))
+  age=$(( $(date +%s) - mtime ))
   if (( age < 5 )); then
-    log "skipping '$base' (mtime age ${age}s)"
-    continue
+    wait_s=$(( 5 - age + 1 ))
+    log "waiting ${wait_s}s for '$base' to settle (mtime age ${age}s)"
+    sleep "$wait_s"
+    new_mtime=$(stat -f %m "$path" 2>/dev/null || echo 0)
+    if [[ "$new_mtime" != "$mtime" ]]; then
+      log "skipping '$base' (still being written; mtime advanced during wait)"
+      continue
+    fi
   fi
 
   processed_any=1
