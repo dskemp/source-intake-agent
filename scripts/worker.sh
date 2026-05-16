@@ -37,8 +37,13 @@ MAX_RETRIES="${MAX_RETRIES:-2}"                  # 0 = single attempt, 2 = up to
 RETRY_BACKOFF="${RETRY_BACKOFF:-30}"             # seconds between retries
 RUNS_LOG_MAX_BYTES="${RUNS_LOG_MAX_BYTES:-5242880}"   # rotate runs.jsonl > 5 MB
 RUN_LOG_KEEP="${RUN_LOG_KEEP:-50}"               # number of per-iteration archives to retain
+# Preprint promotion: how to handle PDFs that look like the published version
+# of a tracked preprint. auto = archive the preprint summary and intake the
+# published PDF into its category slot. stage = route the PDF to
+# _promoted/_pending/ for manual review. off = skip detection entirely.
+PREPRINT_PROMOTION_MODE="${PREPRINT_PROMOTION_MODE:-auto}"
 
-mkdir -p "$INBOX/.staged" "$INBOX/_failed" "$INBOX/_duplicate" "$CONFIG" "$RUN_LOGS_DIR"
+mkdir -p "$INBOX/.staged" "$INBOX/_failed" "$INBOX/_duplicate" "$INBOX/_promoted" "$CONFIG" "$RUN_LOGS_DIR"
 
 if [[ ! -f "$PROMPT_FILE" ]]; then
   echo "ERROR: prompt file missing at $PROMPT_FILE" >&2
@@ -328,8 +333,39 @@ for path in "$INBOX"/*; do
 
   processed_any=1
 
+  # Per-iteration promotion state. is_promotion=1 means the rest of this loop
+  # should run normal intake but post-process the produced summary into the
+  # archived preprint's category folder (see "promote" branch below).
+  is_promotion=0
+  promote_target_dir=""
+  promote_preprint_rel=""
+
   # --- Dedup check ----------------------------------------------------------
   dedup_result="$(check_dedup "$path" || true)"
+  # Preprint promotion: if standard dedup didn't fire and this is a PDF, ask
+  # detect-promotion.py whether the input looks like the published version of
+  # a tracked preprint. Returns "PROMOTE:<library-rel-path>" or nothing.
+  if [[ -z "$dedup_result" ]] && [[ "$PREPRINT_PROMOTION_MODE" != "off" ]] && [[ "$base" == *.[Pp][Dd][Ff] ]]; then
+    # In a deployed install, this script lives at $SCRIPTS_DIR alongside
+    # claude-source-intake-detect-promotion.py. In the repo, it's
+    # scripts/detect-promotion.py. Try both.
+    promote_helper=""
+    for cand in \
+      "$(dirname "$0")/claude-source-intake-detect-promotion.py" \
+      "$(dirname "$0")/detect-promotion.py"; do
+      [[ -f "$cand" ]] && { promote_helper="$cand"; break; }
+    done
+    if [[ -n "$promote_helper" ]]; then
+      promote_line=$(LIBRARY_PATH="$LIBRARY" PREPRINT_CONFIG="$CONFIG" \
+        "$PYTHON" "$promote_helper" "$path" 2>>"$CONFIG/promotion.log" || true)
+    else
+      promote_line=""
+    fi
+    if [[ "$promote_line" == PROMOTE:* ]]; then
+      promote_rel="${promote_line#PROMOTE:}"
+      dedup_result="$LIBRARY/$promote_rel"$'\t'"promote"
+    fi
+  fi
   if [[ -n "$dedup_result" ]]; then
     matched_path="${dedup_result%%$'\t'*}"
     matched_reason="${dedup_result##*$'\t'}"
@@ -368,19 +404,101 @@ for path in "$INBOX"/*; do
       continue
     fi
 
-    log "duplicate '$base' (matched by $matched_reason): $matched_path"
-    dup_dest="$INBOX/_duplicate/$base"
-    n=1
-    while [[ -e "$dup_dest" ]]; do
-      if [[ "$base" == *.* ]]; then
-        dup_dest="$INBOX/_duplicate/${base%.*}.${n}.${base##*.}"
-      else
-        dup_dest="$INBOX/_duplicate/${base}.${n}"
+    # Promote: input PDF looks like the published version of a tracked
+    # preprint summary. In stage mode, route the PDF to _promoted/_pending/
+    # for manual review. In auto mode, archive the preprint summary + its
+    # source artifacts and fall through to normal intake; post-success the
+    # produced summary is moved into the preprint's category slot.
+    if [[ "$matched_reason" == "promote" ]]; then
+      preprint_summary="$matched_path"
+      preprint_dir=$(dirname "$preprint_summary")
+      preprint_slug=$(basename "$preprint_summary" .summary.md)
+      preprint_rel="${preprint_summary#"$LIBRARY/"}"
+
+      if [[ "$PREPRINT_PROMOTION_MODE" == "stage" ]]; then
+        pend_dir="$INBOX/_promoted/_pending"
+        mkdir -p "$pend_dir"
+        pend_dest="$pend_dir/$base"
+        n=1
+        while [[ -e "$pend_dest" ]]; do
+          if [[ "$base" == *.* ]]; then
+            pend_dest="$pend_dir/${base%.*}.${n}.${base##*.}"
+          else
+            pend_dest="$pend_dir/${base}.${n}"
+          fi
+          n=$((n+1))
+        done
+        mv "$path" "$pend_dest"
+        cat > "${pend_dest}.log" <<EOF
+Promotion candidate for: $preprint_summary
+Detected: $(date -u '+%Y-%m-%dT%H:%M:%SZ')
+PREPRINT_PROMOTION_MODE=stage (no automatic action taken).
+
+To accept: delete the preprint summary + its sidecar PDF/snapshot, then move
+this file back into the inbox so it intakes into the same category folder.
+To reject: delete this file.
+EOF
+        log "promote-staged '$base' (preprint: $preprint_summary)"
+        stage_paths_file=$(mktemp -t intake-stage-paths)
+        printf '%s\n' "$preprint_summary" > "$stage_paths_file"
+        append_run "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$base" "promote-staged" "$stage_paths_file" "" ""
+        rm -f "$stage_paths_file"
+        continue
       fi
-      n=$((n+1))
-    done
-    mv "$path" "$dup_dest"
-    cat > "${dup_dest}.log" <<EOF
+
+      # auto mode: archive the preprint and let normal intake handle the PDF.
+      archive_ts=$(date -u '+%Y%m%dT%H%M%SZ')
+      archive_dir="$INBOX/_promoted/${archive_ts}-${preprint_slug}"
+      mkdir -p "$archive_dir"
+      mv "$preprint_summary" "$archive_dir/" 2>/dev/null || true
+      [[ -f "$preprint_dir/$preprint_slug.pdf" ]] && \
+        mv "$preprint_dir/$preprint_slug.pdf" "$archive_dir/" 2>/dev/null || true
+      [[ -f "$preprint_dir/$preprint_slug.snapshot.md" ]] && \
+        mv "$preprint_dir/$preprint_slug.snapshot.md" "$archive_dir/" 2>/dev/null || true
+      cat > "$archive_dir/promotion.txt" <<EOF
+Preprint archived during promotion to its published version.
+Original library path: $preprint_summary
+Promoted by inbox file: $base
+Detected: $(date -u '+%Y-%m-%dT%H:%M:%SZ')
+
+The published PDF is being intaked in this tick. The produced summary will
+land in $preprint_dir (the preprint's original category folder).
+EOF
+      # Remove the preprint's cache entry so /preprints no longer lists it.
+      "$PYTHON" - "$CONFIG/preprint-checks.json" "$preprint_rel" <<'PY' || true
+import json, sys
+from pathlib import Path
+cache_path, rel = sys.argv[1], sys.argv[2]
+p = Path(cache_path)
+if not p.exists():
+    sys.exit(0)
+try:
+    cache = json.loads(p.read_text())
+except Exception:
+    sys.exit(0)
+if rel in cache:
+    del cache[rel]
+    p.write_text(json.dumps(cache, indent=2, sort_keys=True))
+PY
+      log "promoting '$base' over preprint $preprint_summary (archived to $archive_dir)"
+      is_promotion=1
+      promote_target_dir="$preprint_dir"
+      promote_preprint_rel="$preprint_rel"
+      # Fall through to normal intake below — do NOT `continue`.
+    else
+      log "duplicate '$base' (matched by $matched_reason): $matched_path"
+      dup_dest="$INBOX/_duplicate/$base"
+      n=1
+      while [[ -e "$dup_dest" ]]; do
+        if [[ "$base" == *.* ]]; then
+          dup_dest="$INBOX/_duplicate/${base%.*}.${n}.${base##*.}"
+        else
+          dup_dest="$INBOX/_duplicate/${base}.${n}"
+        fi
+        n=$((n+1))
+      done
+      mv "$path" "$dup_dest"
+      cat > "${dup_dest}.log" <<EOF
 Duplicate of: $matched_path
 Matched by: $matched_reason
 Detected: $(date -u '+%Y-%m-%dT%H:%M:%SZ')
@@ -390,14 +508,15 @@ already references the same source ($matched_reason match). To force
 re-processing, delete the existing summary first, then move this file
 back to the inbox.
 EOF
-    # Append a duplicate entry to runs.jsonl
-    dup_paths_file=$(mktemp -t intake-dup-paths)
-    printf '%s\n' "$matched_path" > "$dup_paths_file"
-    dup_err_file=$(mktemp -t intake-dup-err)
-    printf 'duplicate of %s (matched by %s)\n' "$matched_path" "$matched_reason" > "$dup_err_file"
-    append_run "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$base" "duplicate" "$dup_paths_file" "$dup_err_file" ""
-    rm -f "$dup_paths_file" "$dup_err_file"
-    continue
+      # Append a duplicate entry to runs.jsonl
+      dup_paths_file=$(mktemp -t intake-dup-paths)
+      printf '%s\n' "$matched_path" > "$dup_paths_file"
+      dup_err_file=$(mktemp -t intake-dup-err)
+      printf 'duplicate of %s (matched by %s)\n' "$matched_path" "$matched_reason" > "$dup_err_file"
+      append_run "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$base" "duplicate" "$dup_paths_file" "$dup_err_file" ""
+      rm -f "$dup_paths_file" "$dup_err_file"
+      continue
+    fi
   fi
 
   log "processing '$base'"
@@ -531,9 +650,32 @@ print(template.replace("<STAGED_PATH>", sys.argv[2]).replace("<DOMAIN>", domain)
           fi
         fi
       fi
+      # Promotion: relocate the produced summary (and its filed PDF) into the
+      # archived preprint's category folder so it inherits that library slot.
+      if (( is_promotion )) && [[ -n "$promote_target_dir" ]]; then
+        produced_folder=$(dirname "$produced_path")
+        if [[ "$produced_folder" != "$promote_target_dir" ]]; then
+          mkdir -p "$promote_target_dir"
+          produced_slug=$(basename "$produced_path" .summary.md)
+          if mv "$produced_path" "$promote_target_dir/" 2>/dev/null; then
+            log "  promoted summary -> $promote_target_dir/$(basename "$produced_path")"
+            # Replace the path in produced_list so append_run logs the final
+            # location, not the intermediate one.
+            sed -i.bak "s|^${produced_path}$|${promote_target_dir}/$(basename "$produced_path")|" "$produced_list" 2>/dev/null && rm -f "${produced_list}.bak"
+          else
+            log "  WARNING: failed to move produced summary into $promote_target_dir"
+          fi
+          if (( is_pdf )) && [[ -f "$produced_folder/$produced_slug.pdf" ]]; then
+            mv "$produced_folder/$produced_slug.pdf" "$promote_target_dir/" 2>/dev/null || \
+              log "  WARNING: failed to move filed PDF into $promote_target_dir"
+          fi
+        fi
+      fi
     done < "$produced_list"
     rm -f "$staged_path"
-    append_run "$start_ts" "$base" "success" "$produced_list" "" "$run_log"
+    outcome="success"
+    (( is_promotion )) && outcome="promoted"
+    append_run "$start_ts" "$base" "$outcome" "$produced_list" "" "$run_log"
     if "$PYTHON" "$HOME/Library/Scripts/claude-source-intake-regen-index.py" 2>&1; then
       log "  INDEX.md regenerated"
     else
@@ -541,6 +683,25 @@ print(template.replace("<STAGED_PATH>", sys.argv[2]).replace("<DOMAIN>", domain)
     fi
   else
     log "  failure (claude exit $claude_exit, $num_produced summary file(s) produced)"
+    # Promotion safety net: if we archived a preprint summary in this tick but
+    # the intake then failed, restore the preprint so the library isn't left
+    # with a hole. The promoted PDF still goes to _failed/ for retry.
+    if (( is_promotion )) && [[ -d "$archive_dir" ]] && [[ -n "$promote_target_dir" ]]; then
+      restored=0
+      for f in "$archive_dir"/*; do
+        bn=$(basename "$f")
+        [[ "$bn" == "promotion.txt" ]] && continue
+        if mv "$f" "$promote_target_dir/" 2>/dev/null; then
+          restored=1
+        fi
+      done
+      if (( restored )); then
+        log "  restored archived preprint from $archive_dir -> $promote_target_dir (intake failed)"
+        # Append a marker explaining why the archive dir is now empty/partial.
+        printf '\nNOTE: intake of the promoted PDF failed at %s; preprint files were restored to %s.\n' \
+          "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$promote_target_dir" >> "$archive_dir/promotion.txt" 2>/dev/null || true
+      fi
+    fi
     fail_dest="$INBOX/_failed/$base"
     n=1
     while [[ -e "$fail_dest" ]]; do
