@@ -30,6 +30,8 @@ RUNS_LOG = CONFIG / "runs.jsonl"
 WORKER_OUT_LOG = "/tmp/claude-source-intake.out.log"
 WORKER_ERR_LOG = "/tmp/claude-source-intake.err.log"
 WORKER = HOME / "Library/Scripts/claude-source-intake.sh"
+REGEN_INDEX = HOME / "Library/Scripts/claude-source-intake-regen-index.py"
+VENV_PYTHON = CONFIG / "venv/bin/python"
 
 PORT = int(os.environ.get("DASHBOARD_PORT", "7341"))
 
@@ -252,6 +254,94 @@ def find_source_file(summary: Path):
                 rel = candidate.as_posix()
             return {"rel_path": rel, "kind": kind}
     return None
+
+
+INDEX_LINK_RE = re.compile(r"\]\(([^)\s]+\.summary\.md)\)")
+
+
+def audit_library():
+    """Walk the library and surface drift between disk and INDEX.md.
+
+    Catches the failure mode where the user deletes a source folder by hand
+    but INDEX.md hasn't been regenerated since (it's only rewritten on a
+    successful intake), plus missing-sidecar and unparseable-frontmatter
+    cases that the index generator silently skips.
+    """
+    findings = {
+        "summaries": [],
+        "missing_originals": [],
+        "bad_frontmatter": [],
+        "index_orphans": [],
+        "unindexed": [],
+        "index_exists": False,
+        "index_mtime": None,
+        "library_exists": LIBRARY.exists(),
+    }
+    if not LIBRARY.exists():
+        return findings
+
+    on_disk_paths: set[str] = set()
+    for summary in LIBRARY.glob("*/*/*.summary.md"):
+        category = summary.parent.parent.name
+        if category.startswith(".") or category.startswith("_"):
+            continue
+        rel = summary.relative_to(LIBRARY).as_posix()
+        on_disk_paths.add(rel)
+        fm = parse_frontmatter(summary)
+        if fm is None:
+            findings["bad_frontmatter"].append({"rel_path": rel, "category": category})
+            continue
+        sf = find_source_file(summary)
+        entry = {
+            "rel_path": rel,
+            "title": fm.get("title") or summary.stem,
+            "category": category,
+            "original_kind": sf["kind"] if sf else None,
+            "original_rel": sf["rel_path"] if sf else None,
+        }
+        findings["summaries"].append(entry)
+        if sf is None:
+            findings["missing_originals"].append(entry)
+
+    index_path = LIBRARY / "INDEX.md"
+    indexed_paths: set[str] = set()
+    if index_path.exists():
+        findings["index_exists"] = True
+        findings["index_mtime"] = index_path.stat().st_mtime
+        try:
+            text = index_path.read_text(errors="replace")
+            for m in INDEX_LINK_RE.finditer(text):
+                indexed_paths.add(m.group(1))
+        except OSError:
+            pass
+
+    findings["index_orphans"] = sorted(indexed_paths - on_disk_paths)
+    findings["unindexed"] = sorted(on_disk_paths - indexed_paths)
+    findings["summaries"].sort(key=lambda s: (s["category"], s["title"].lower()))
+    return findings
+
+
+def regen_index_now(timeout: int = 30) -> tuple[bool, str]:
+    """Invoke the deployed regen-index.py via the worker venv.
+
+    Returns (ok, message). Failures are non-fatal — the caller decides
+    whether to flash an error or proceed.
+    """
+    if not REGEN_INDEX.exists():
+        return False, f"regen-index script not found at {REGEN_INDEX}"
+    if not VENV_PYTHON.exists():
+        return False, f"venv python not found at {VENV_PYTHON}"
+    env = {**os.environ, "LIBRARY_PATH": str(LIBRARY)}
+    try:
+        r = subprocess.run(
+            [str(VENV_PYTHON), str(REGEN_INDEX)],
+            capture_output=True, text=True, timeout=timeout, env=env,
+        )
+    except subprocess.SubprocessError as e:
+        return False, f"regen-index failed: {e}"
+    if r.returncode != 0:
+        return False, (r.stderr or r.stdout or "regen-index returned non-zero").strip()
+    return True, (r.stdout or "INDEX.md regenerated").strip()
 
 
 def short_authors(authors, max_shown=3):
@@ -500,9 +590,11 @@ pre { background: #1A202C; color: #E2E8F0; padding: var(--space-3) var(--space-4
 def nav_html(active: str) -> str:
     home_class = ' class="active"' if active == "home" else ""
     lib_class = ' class="active"' if active == "library" else ""
+    audit_class = ' class="active"' if active == "audit" else ""
     return f"""<nav class="topnav">
   <a href="/"{home_class}>Source Intake</a>
   <a href="/library"{lib_class}>Library</a>
+  <a href="/audit"{audit_class}>Audit</a>
 </nav>"""
 
 
@@ -818,6 +910,8 @@ LIBRARY_TEMPLATE = """<!doctype html>
 <h1>Library <span class="h-suffix">— {{ total }} sources across {{ by_cat|length }} {{ 'category' if by_cat|length == 1 else 'categories' }}</span></h1>
 {% if domain %}<p class="tagline">{{ domain }}</p>{% endif %}
 
+{% if flash %}<div class="flash">{{ flash }}</div>{% endif %}
+
 <div class="controls">
   <input id="filter" type="search" placeholder="Filter by title, tldr, author, tag, category…" autofocus>
   <span class="mute" id="match-count"></span>
@@ -847,6 +941,10 @@ LIBRARY_TEMPLATE = """<!doctype html>
         <td class="mute">{{ s.year or '—' }}</td>
         <td class="actions">
           <a href="/source/{{ s.rel_path|urlencode }}" class="btn">View</a>
+          <form method="post" action="/delete-source" onsubmit="return confirm('Permanently delete this source folder and all its files? INDEX.md will be regenerated.');" style="display:inline;margin-left:.25rem">
+            <input type="hidden" name="rel_path" value="{{ s.rel_path }}">
+            <button type="submit" class="danger">Delete</button>
+          </form>
         </td>
       </tr>
       {% endfor %}
@@ -921,6 +1019,7 @@ def library_view():
         nav=nav_html("library"),
         font_link=FONT_LINK,
         shared_styles=SHARED_STYLES,
+        flash=request.args.get("flash", ""),
     )
 
 
@@ -992,6 +1091,10 @@ SOURCE_TEMPLATE = """<!doctype html>
   <span><code>{{ rel_path }}</code></span>
   <span class="grow"></span>
   <form method="post" action="/api/open"><input type="hidden" name="path" value="{{ rel_path }}"><button type="submit">Open externally</button></form>
+  <form method="post" action="/delete-source" onsubmit="return confirm('Permanently delete this source folder and all its files? INDEX.md will be regenerated.');">
+    <input type="hidden" name="rel_path" value="{{ rel_path }}">
+    <button type="submit" class="danger">Delete source</button>
+  </form>
 </div>
 </body>
 </html>"""
@@ -1210,6 +1313,233 @@ def save_prompt():
     PROMPT_FILE.parent.mkdir(parents=True, exist_ok=True)
     PROMPT_FILE.write_text(content)
     return redirect("/?flash=Prompt+saved")
+
+
+AUDIT_TEMPLATE = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Library audit</title>
+{{ font_link | safe }}
+{{ shared_styles | safe }}
+<style>
+  body { max-width: 1100px; }
+  .summary-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: var(--space-3); margin: var(--space-4) 0 var(--space-6); }
+  .tile { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: var(--space-4); box-shadow: var(--shadow-1); }
+  .tile .n { font-family: var(--font-ui); font-size: 1.8rem; font-weight: 600; color: var(--color-primary); line-height: 1.1; }
+  .tile.warn .n { color: var(--color-warning-700); }
+  .tile.bad .n { color: var(--color-error-700); }
+  .tile.ok .n { color: var(--color-success-700); }
+  .tile .label { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-text-faint); font-weight: 600; margin-top: var(--space-1); }
+  .all-clear { background: var(--color-success-100); border: 1px solid #C8E6C9; border-left: 4px solid var(--color-success-600); border-radius: var(--radius-md); padding: var(--space-4) var(--space-5); color: var(--color-success-700); margin: var(--space-4) 0; }
+  .issue-section { margin-top: var(--space-6); }
+  .issue-section .desc { color: var(--color-text-muted); font-size: 0.9rem; margin: var(--space-2) 0 var(--space-3); }
+</style>
+</head>
+<body>
+{{ nav | safe }}
+<h1>Library audit</h1>
+<p class="tagline">Cross-checks <code>INDEX.md</code> against what's on disk and flags missing originals or broken frontmatter.</p>
+
+{% if flash %}<div class="flash">{{ flash }}</div>{% endif %}
+
+<div class="strip">
+  <span class="mute">Library: <code>{{ library_path }}</code></span>
+  <span class="grow"></span>
+  <form method="post" action="/regen-index"><button class="primary">Regenerate INDEX.md</button></form>
+</div>
+
+{% if not findings.library_exists %}
+<div class="flash" style="background:var(--color-error-100); border-color:var(--color-error-600); color:var(--color-error-700)">
+  Library directory does not exist at <code>{{ library_path }}</code>. Check <code>LIBRARY_PATH</code> in the launchd plist.
+</div>
+{% else %}
+
+<div class="summary-tiles">
+  <div class="tile ok">
+    <div class="n">{{ findings.summaries|length }}</div>
+    <div class="label">Summaries on disk</div>
+  </div>
+  <div class="tile {% if findings.index_orphans %}bad{% else %}ok{% endif %}">
+    <div class="n">{{ findings.index_orphans|length }}</div>
+    <div class="label">Stale INDEX entries</div>
+  </div>
+  <div class="tile {% if findings.unindexed %}warn{% else %}ok{% endif %}">
+    <div class="n">{{ findings.unindexed|length }}</div>
+    <div class="label">Unindexed summaries</div>
+  </div>
+  <div class="tile {% if findings.missing_originals %}warn{% else %}ok{% endif %}">
+    <div class="n">{{ findings.missing_originals|length }}</div>
+    <div class="label">Missing originals</div>
+  </div>
+  <div class="tile {% if findings.bad_frontmatter %}bad{% else %}ok{% endif %}">
+    <div class="n">{{ findings.bad_frontmatter|length }}</div>
+    <div class="label">Bad frontmatter</div>
+  </div>
+</div>
+
+{% set total_issues = findings.index_orphans|length + findings.unindexed|length + findings.missing_originals|length + findings.bad_frontmatter|length %}
+{% if total_issues == 0 %}
+<div class="all-clear">✔ All clear. {{ findings.summaries|length }} summaries on disk, all indexed, all with original sidecars.</div>
+{% endif %}
+
+{% if findings.index_orphans %}
+<section class="issue-section">
+  <h2>Stale INDEX entries <span class="h-suffix">— {{ findings.index_orphans|length }}</span></h2>
+  <p class="desc">These paths are linked from <code>INDEX.md</code> but no <code>.summary.md</code> exists at them on disk. Almost always: a source folder was deleted by hand and INDEX.md hasn't been regenerated since. Click <strong>Regenerate INDEX.md</strong> above to clean them up.</p>
+  <table>
+    <thead><tr><th>Path referenced in INDEX.md</th></tr></thead>
+    <tbody>
+      {% for p in findings.index_orphans %}
+      <tr><td><code>{{ p }}</code></td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+{% if findings.unindexed %}
+<section class="issue-section">
+  <h2>Unindexed summaries <span class="h-suffix">— {{ findings.unindexed|length }}</span></h2>
+  <p class="desc">Summary files that exist on disk but aren't linked from <code>INDEX.md</code>. Usually means INDEX.md is stale (regenerate) or the summary's frontmatter doesn't parse (see "Bad frontmatter" below).</p>
+  <table>
+    <thead><tr><th>Path on disk</th><th class="actions">Actions</th></tr></thead>
+    <tbody>
+      {% for p in findings.unindexed %}
+      <tr>
+        <td><a href="/source/{{ p|urlencode }}"><code>{{ p }}</code></a></td>
+        <td class="actions"><a href="/source/{{ p|urlencode }}" class="btn">View</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+{% if findings.missing_originals %}
+<section class="issue-section">
+  <h2>Missing originals <span class="h-suffix">— {{ findings.missing_originals|length }}</span></h2>
+  <p class="desc">Summaries that have no sibling <code>.pdf</code> or <code>.snapshot.md</code>. The summary alone is fine to keep, but you've lost the source artifact. If that's not intended, delete the summary and re-process from the inbox.</p>
+  <table>
+    <thead><tr><th>Title</th><th>Category</th><th>Path</th><th class="actions">Actions</th></tr></thead>
+    <tbody>
+      {% for s in findings.missing_originals %}
+      <tr>
+        <td>{{ s.title }}</td>
+        <td class="mute">{{ s.category }}</td>
+        <td><code>{{ s.rel_path }}</code></td>
+        <td class="actions">
+          <a href="/source/{{ s.rel_path|urlencode }}" class="btn">View</a>
+          <form method="post" action="/delete-source" onsubmit="return confirm('Permanently delete this source folder? INDEX.md will be regenerated.');" style="display:inline;margin-left:.25rem">
+            <input type="hidden" name="rel_path" value="{{ s.rel_path }}">
+            <button type="submit" class="danger">Delete</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+{% if findings.bad_frontmatter %}
+<section class="issue-section">
+  <h2>Bad frontmatter <span class="h-suffix">— {{ findings.bad_frontmatter|length }}</span></h2>
+  <p class="desc">Summary files whose YAML frontmatter is missing or can't be parsed. <code>regen-index.py</code> silently skips these, which is why they may also appear under "Unindexed".</p>
+  <table>
+    <thead><tr><th>Path</th><th>Category</th></tr></thead>
+    <tbody>
+      {% for s in findings.bad_frontmatter %}
+      <tr><td><code>{{ s.rel_path }}</code></td><td class="mute">{{ s.category }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+<details class="settings" style="margin-top:2rem">
+  <summary>All summaries ({{ findings.summaries|length }})</summary>
+  <table style="margin-top:1rem">
+    <thead><tr><th>Title</th><th>Category</th><th>Original</th><th class="actions">Actions</th></tr></thead>
+    <tbody>
+      {% for s in findings.summaries %}
+      <tr>
+        <td><a href="/source/{{ s.rel_path|urlencode }}">{{ s.title }}</a></td>
+        <td class="mute">{{ s.category }}</td>
+        <td>{% if s.original_kind %}<span class="badge ok">{{ s.original_kind }}</span>{% else %}<span class="badge bad">missing</span>{% endif %}</td>
+        <td class="actions">
+          <form method="post" action="/delete-source" onsubmit="return confirm('Permanently delete this source folder? INDEX.md will be regenerated.');" style="display:inline">
+            <input type="hidden" name="rel_path" value="{{ s.rel_path }}">
+            <button type="submit" class="danger">Delete</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</details>
+{% endif %}
+</body>
+</html>"""
+
+
+@app.route("/audit")
+def audit_view():
+    findings = audit_library()
+    return render_template_string(
+        AUDIT_TEMPLATE,
+        findings=findings,
+        library_path=str(LIBRARY),
+        nav=nav_html("audit"),
+        font_link=FONT_LINK,
+        shared_styles=SHARED_STYLES,
+        flash=request.args.get("flash", ""),
+    )
+
+
+@app.route("/regen-index", methods=["POST"])
+def regen_index_route():
+    ok, msg = regen_index_now()
+    flash = ("INDEX.md regenerated: " if ok else "Regenerate failed: ") + msg
+    # urlencode-safe via Flask's redirect (which doesn't auto-encode the query);
+    # use replace as a minimal guard against fragment / ampersand confusion.
+    safe = flash.replace("&", "and").replace("#", "")
+    return redirect(f"/audit?flash={safe}")
+
+
+@app.route("/delete-source", methods=["POST"])
+def delete_source():
+    rel = request.form.get("rel_path", "")
+    if not rel or ".." in rel.split("/") or rel.startswith("/"):
+        abort(400, "invalid path")
+    target = (LIBRARY / rel).resolve()
+    try:
+        target.relative_to(LIBRARY.resolve())
+    except ValueError:
+        abort(400, "outside library")
+    if not target.exists() or not target.is_file():
+        abort(404)
+    if not target.name.endswith(".summary.md"):
+        abort(400, "not a summary path")
+    folder = target.parent
+    try:
+        parts = folder.relative_to(LIBRARY.resolve()).parts
+    except ValueError:
+        abort(400, "outside library")
+    # Must be exactly <category>/<slug>/. Any other depth is suspicious.
+    if len(parts) != 2:
+        abort(400, "unexpected folder depth")
+    category, slug = parts
+    if category.startswith(".") or category.startswith("_"):
+        abort(400, "category is private")
+    if not slug or slug.startswith(".") or slug.startswith("_"):
+        abort(400, "invalid slug")
+    shutil.rmtree(folder)
+    ok, msg = regen_index_now()
+    flash = f"Deleted {category}/{slug}"
+    if not ok:
+        flash += f" (warning: index regen failed — {msg})"
+    return redirect("/library?flash=" + flash.replace("&", "and").replace("#", "").replace(" ", "+"))
 
 
 if __name__ == "__main__":

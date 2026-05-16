@@ -226,7 +226,14 @@ ls -l ~/Library/Scripts/claude-source-intake.sh
 - **Dashboard pages:**
   - `/` — live status, queue, recent runs (cost + duration), failed items,
     last-run replay, prompt editor.
-  - `/library` — searchable, sortable browser of all sources with click-to-open.
+  - `/library` — searchable, sortable browser of all sources with click-to-open
+    and a per-row **Delete** button (removes the `<category>/<slug>/` folder and
+    regenerates `INDEX.md`).
+  - `/audit` — cross-checks `INDEX.md` against what's on disk. Catches stale
+    INDEX entries (folder deleted by hand but still linked), unindexed
+    summaries, summaries missing their original sidecar (`.pdf` / `.snapshot.md`),
+    and unparseable frontmatter. Has a one-click **Regenerate INDEX.md** button
+    to fix the stale-index case.
 - **Pause/resume the watcher** from the dashboard, or:
   ```sh
   touch ~/.config/claude-source-intake/paused      # pause
