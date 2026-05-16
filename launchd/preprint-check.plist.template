@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>__LABEL_PREFIX__.claude-source-intake-preprint-check</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>__HOME__/.config/claude-source-intake/venv/bin/python</string>
+        <string>__HOME__/Library/Scripts/claude-source-intake-check-preprints.py</string>
+    </array>
+    <!-- Weekly: Monday at 03:15. StartCalendarInterval fires whenever the
+         machine is awake and matches the spec; if the Mac is asleep at the
+         scheduled time, launchd runs it as soon as it wakes. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Weekday</key>
+        <integer>1</integer>
+        <key>Hour</key>
+        <integer>3</integer>
+        <key>Minute</key>
+        <integer>15</integer>
+    </dict>
+    <key>RunAtLoad</key>
+    <false/>
+    <key>StandardOutPath</key>
+    <string>/tmp/claude-source-intake-preprint-check.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/claude-source-intake-preprint-check.err.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>__HOME__</string>
+        <key>LIBRARY_PATH</key>
+        <string>__LIBRARY__</string>
+        <key>OPENALEX_EMAIL</key>
+        <string>__OPENALEX_EMAIL__</string>
+    </dict>
+</dict>
+</plist>

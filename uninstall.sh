@@ -39,13 +39,16 @@ unload_agent() {
 
 unload_agent "${LABEL_PREFIX}.claude-source-intake"
 unload_agent "${LABEL_PREFIX}.claude-source-intake-ui"
+unload_agent "${LABEL_PREFIX}.claude-source-intake-preprint-check"
 
 echo "==> removing deployed scripts and plists"
 rm -f "$PLISTS_DIR/${LABEL_PREFIX}.claude-source-intake.plist" \
       "$PLISTS_DIR/${LABEL_PREFIX}.claude-source-intake-ui.plist" \
+      "$PLISTS_DIR/${LABEL_PREFIX}.claude-source-intake-preprint-check.plist" \
       "$SCRIPTS_DIR/claude-source-intake.sh" \
       "$SCRIPTS_DIR/claude-source-intake-ui.py" \
-      "$SCRIPTS_DIR/claude-source-intake-regen-index.py"
+      "$SCRIPTS_DIR/claude-source-intake-regen-index.py" \
+      "$SCRIPTS_DIR/claude-source-intake-check-preprints.py"
 
 if (( PURGE )); then
   echo "==> purging config dir $CONFIG"
