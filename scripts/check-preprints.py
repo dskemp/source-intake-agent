@@ -159,10 +159,27 @@ def openalex_get(path: str, params: dict | None = None) -> dict | None:
         raise
 
 
+_DOI_RE = re.compile(r"\b10\.\d{4,9}/[^\s\"'<>)\],]+", re.IGNORECASE)
+
+
 def _clean_doi(doi: str | None) -> str:
     if not doi:
         return ""
     return doi.replace("https://doi.org/", "").replace("http://doi.org/", "")
+
+
+def _doi_from_url(url: str | None) -> str:
+    """Extract a bare DOI from a landing-page URL, stripping query/fragment."""
+    if not url:
+        return ""
+    m = _DOI_RE.search(url)
+    if not m:
+        return ""
+    doi = m.group(0)
+    for sep in ("?", "#"):
+        if sep in doi:
+            doi = doi.split(sep, 1)[0]
+    return doi.rstrip("/").rstrip(".,;)]>\"'").lower()
 
 
 def _is_preprint_location(loc: dict) -> bool:
@@ -224,9 +241,13 @@ def find_published_location(work: dict) -> dict | None:
     candidates.sort(key=lambda x: x[0], reverse=True)
     best = candidates[0][1]
     published_title = (work.get("title") or work.get("display_name") or "").strip()
+    # OpenAlex's work-level `doi` is often the preprint server's DOI (SSRN,
+    # arXiv) for works first deposited there. The journal DOI shows up only in
+    # the chosen location's landing URL, so surface it as `published_doi`.
     return {
         **best,
         "doi": _clean_doi(work.get("doi")),
+        "published_doi": _doi_from_url(best.get("published_url")),
         "published_title": published_title,
     }
 
@@ -430,9 +451,15 @@ def run(force: bool = False, only_rel: str | None = None) -> dict:
         if p is not preprints[-1]:
             time.sleep(RATE_LIMIT_SLEEP)
     # Prune cache entries for summaries that were deleted since the last run.
-    stale = [k for k in cache if k not in cache_rel_paths]
-    for k in stale:
-        del cache[k]
+    # Skip when --rel-path narrowed the run to one preprint, since
+    # cache_rel_paths then only contains that single entry and pruning would
+    # wipe every other tracked preprint from the cache.
+    if not only_rel:
+        stale = [k for k in cache if k not in cache_rel_paths]
+        for k in stale:
+            del cache[k]
+    else:
+        stale = []
     save_cache(cache)
     return {
         "checked": checked,
