@@ -518,45 +518,14 @@ FONT_LINK = """<link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=Libre+Franklin:wght@400;500;600;700&display=swap" rel="stylesheet">"""
 
 
-SHARED_STYLES = """<style>
+SHARED_STYLES = """<link rel="stylesheet" href="https://assets.davidkemp.ai/tokens.css?v=2.0.0">
+<style>
 :root {
-  --color-primary:        #002959;
-  --color-primary-hover:  #1E3A8A;
-  --color-primary-50:     #F0F4FA;
-  --color-accent:         #FFD200;
-  --color-accent-text:    #806800;
-  --color-accent-100:     #FFF9DB;
-  --color-text:           #2D3748;
-  --color-text-muted:     #4A5568;
-  --color-text-faint:     #697077;
-  --color-surface:        #FFFFFF;
-  --color-surface-alt:    #F5F6F7;
-  --color-surface-page:   #FAFAF7;
-  --color-border:         #E2E8F0;
-  --color-border-strong:  #CBD5E0;
-  --color-success-700:    #1B5E20;
-  --color-success-600:    #2E7D32;
-  --color-success-100:    #E8F5E9;
-  --color-error-700:      #B71C1C;
-  --color-error-600:      #C62828;
-  --color-error-100:      #FFEBEE;
-  --color-warning-700:    #BF360C;
-  --color-warning-600:    #E65100;
-  --color-warning-100:    #FFF3E0;
-  --color-info-700:       #0D47A1;
-  --color-info-600:       #1565C0;
-  --color-info-100:       #E3F2FD;
-  --font-ui:    'Libre Franklin', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  --font-body:  'Libre Baskerville', Charter, Georgia, serif;
-  --font-mono:  'SF Mono', 'Cascadia Code', 'Fira Code', Consolas, 'Liberation Mono', monospace;
-  --space-1: 0.25rem; --space-2: 0.5rem; --space-3: 0.75rem; --space-4: 1rem;
-  --space-5: 1.25rem; --space-6: 1.5rem; --space-8: 2rem; --space-12: 3rem;
-  --radius-sm: 4px; --radius-md: 6px; --radius-lg: 8px;
-  --shadow-1: 0 1px 2px rgba(0,0,0,0.04), 0 1px 3px rgba(0,0,0,0.06);
-  --shadow-2: 0 2px 4px rgba(0,0,0,0.04), 0 4px 12px rgba(0,0,0,0.08);
+  /* Local-only token not defined in the canonical brand file */
+  --color-surface-page: #FAFAF7;
 }
 * { box-sizing: border-box; }
-body { font-family: var(--font-ui); font-size: 14px; line-height: 1.5; background: var(--color-surface-page); color: var(--color-text); margin: 0; padding: var(--space-8); max-width: 1100px; margin-left: auto; margin-right: auto; -webkit-font-smoothing: antialiased; font-feature-settings: "kern", "liga"; }
+body { font-family: var(--font-ui); font-size: 14px; line-height: 1.5; background: var(--color-surface-page); color: var(--color-text); margin: 0; padding: var(--space-8); max-width: var(--width-wide); margin-left: auto; margin-right: auto; -webkit-font-smoothing: antialiased; font-feature-settings: "kern", "liga"; }
 h1 { font-family: var(--font-ui); font-size: 1.75rem; font-weight: 600; letter-spacing: -0.015em; margin: 0 0 var(--space-2); color: var(--color-primary); }
 h2 { font-family: var(--font-ui); font-size: 0.78rem; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--color-text-faint); margin: var(--space-8) 0 var(--space-3); }
 a { color: var(--color-primary-hover); text-decoration: none; }
@@ -623,6 +592,13 @@ pre { background: #1A202C; color: #E2E8F0; padding: var(--space-3) var(--space-4
 .paths a { color: var(--color-primary-hover); text-decoration: none; }
 .paths a:hover code { background: var(--color-primary-50); color: var(--color-primary); }
 .cats { margin-top: var(--space-2); font-family: var(--font-mono); font-size: 0.85rem; color: var(--color-text-muted); }
+.summary-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: var(--space-3); margin: var(--space-4) 0 var(--space-6); }
+.tile { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: var(--space-4); box-shadow: var(--shadow-1); }
+.tile .n { font-family: var(--font-ui); font-size: 1.8rem; font-weight: 600; color: var(--color-primary); line-height: 1.1; }
+.tile.ok .n { color: var(--color-success-700); }
+.tile.warn .n { color: var(--color-warning-700); }
+.tile.bad .n { color: var(--color-error-700); }
+.tile .label { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-text-faint); font-weight: 600; margin-top: var(--space-1); }
 </style>"""
 
 
@@ -930,7 +906,6 @@ LIBRARY_TEMPLATE = """<!doctype html>
 {{ font_link | safe }}
 {{ shared_styles | safe }}
 <style>
-  body { max-width: 1300px; }
   .controls { position: sticky; top: 0; background: var(--color-surface-page); padding: var(--space-3) 0; z-index: 5; display: flex; gap: var(--space-4); align-items: center; border-bottom: 1px solid var(--color-border); margin-bottom: var(--space-4); }
   .controls input[type=search] { flex: 1; max-width: 30rem; font-size: 0.95rem; }
   .title { font-family: var(--font-ui); font-weight: 600; font-size: 1rem; line-height: 1.4; }
@@ -944,7 +919,6 @@ LIBRARY_TEMPLATE = """<!doctype html>
   .tag { display: inline-block; padding: 0.1rem 0.5rem; background: var(--color-primary-50); color: var(--color-primary); border-radius: var(--radius-sm); font-size: 0.72rem; font-weight: 500; cursor: pointer; font-family: var(--font-ui); transition: background 100ms; }
   .tag:hover { background: #DBE5F0; }
   .hidden { display: none !important; }
-  .nomatch { padding: var(--space-12); text-align: center; color: var(--color-text-faint); font-style: italic; }
 </style>
 </head>
 <body>
@@ -959,7 +933,7 @@ LIBRARY_TEMPLATE = """<!doctype html>
   <span class="mute" id="match-count"></span>
 </div>
 
-<div id="nomatch" class="nomatch hidden">No sources match.</div>
+<div id="nomatch" class="empty hidden">No sources match.</div>
 
 {% for cat in cats %}
 {% if cat in by_cat %}
@@ -1365,14 +1339,6 @@ PREPRINTS_TEMPLATE = """<!doctype html>
 {{ font_link | safe }}
 {{ shared_styles | safe }}
 <style>
-  body { max-width: 1200px; }
-  .summary-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: var(--space-3); margin: var(--space-4) 0 var(--space-6); }
-  .tile { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: var(--space-4); box-shadow: var(--shadow-1); }
-  .tile .n { font-family: var(--font-ui); font-size: 1.8rem; font-weight: 600; color: var(--color-primary); line-height: 1.1; }
-  .tile.ok .n { color: var(--color-success-700); }
-  .tile.warn .n { color: var(--color-warning-700); }
-  .tile.bad .n { color: var(--color-error-700); }
-  .tile .label { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-text-faint); font-weight: 600; margin-top: var(--space-1); }
   .conf-high { color: var(--color-success-700); font-weight: 600; }
   .conf-medium { color: var(--color-warning-700); font-weight: 600; }
   .conf-low { color: var(--color-error-700); font-weight: 600; }
@@ -1641,14 +1607,6 @@ AUDIT_TEMPLATE = """<!doctype html>
 {{ font_link | safe }}
 {{ shared_styles | safe }}
 <style>
-  body { max-width: 1100px; }
-  .summary-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: var(--space-3); margin: var(--space-4) 0 var(--space-6); }
-  .tile { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: var(--space-4); box-shadow: var(--shadow-1); }
-  .tile .n { font-family: var(--font-ui); font-size: 1.8rem; font-weight: 600; color: var(--color-primary); line-height: 1.1; }
-  .tile.warn .n { color: var(--color-warning-700); }
-  .tile.bad .n { color: var(--color-error-700); }
-  .tile.ok .n { color: var(--color-success-700); }
-  .tile .label { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-text-faint); font-weight: 600; margin-top: var(--space-1); }
   .all-clear { background: var(--color-success-100); border: 1px solid #C8E6C9; border-left: 4px solid var(--color-success-600); border-radius: var(--radius-md); padding: var(--space-4) var(--space-5); color: var(--color-success-700); margin: var(--space-4) 0; }
   .issue-section { margin-top: var(--space-6); }
   .issue-section .desc { color: var(--color-text-muted); font-size: 0.9rem; margin: var(--space-2) 0 var(--space-3); }
