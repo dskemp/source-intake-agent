@@ -1,8 +1,8 @@
 # Source-Intake Agent
 
-A macOS automation that watches a folder, runs Claude Code's `source-intake`
-skill on each dropped file in headless mode, and files the resulting summary
-into a personal research library — no human in the loop. Domain-agnostic:
+A macOS automation that watches a folder, runs Claude Code headlessly on
+each dropped file, and files the resulting summary into a personal research
+library — no human in the loop. Domain-agnostic:
 configure it once with a description of what your library covers (legal AI
 papers, cooking recipes, tech-industry news, climate policy, etc.) and the
 LLM adapts category choices, tagging, section framing, and tone to fit.
@@ -406,7 +406,7 @@ superseded_by: ""
 ```
 
 The `tldr` field powers the Tl;dr column in `INDEX.md` and the dashboard's
-Library page. The skill is instructed to include it on every intake.
+Library page. The prompt requires it on every intake.
 
 ## Troubleshooting
 

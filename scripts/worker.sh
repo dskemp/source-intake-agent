@@ -638,9 +638,8 @@ print(template.replace("<STAGED_PATH>", sys.argv[2]).replace("<DOMAIN>", domain)
     log "  success (claude exit 0, $num_produced summary file(s) produced)"
     # Inject source_hash into each produced summary so future drops dedup.
     # Also ensure the original input is filed alongside the summary as
-    # <slug>.pdf — the source-intake skill is supposed to copy it, but isn't
-    # always registered for headless runs, in which case the agent's manual
-    # fallback can forget the copy step. Belt-and-suspenders here.
+    # <slug>.pdf — the prompt asks the agent to copy it, but agents
+    # occasionally skip that step. Belt-and-suspenders here.
     input_hash=$(file_sha256 "$staged_path")
     is_pdf=0
     [[ "$base" == *.[Pp][Dd][Ff] ]] && is_pdf=1
