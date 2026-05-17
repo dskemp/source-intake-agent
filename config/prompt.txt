@@ -8,8 +8,8 @@ and the section framing (e.g., "Key Claims" vs "Main Argument" vs "Recipe
 Steps" — pick what's natural for this domain). When no existing category
 folder fits, propose a new one whose name fits the domain's vocabulary.
 
-Process <STAGED_PATH> headlessly via the source-intake skill. Make all
-judgment calls yourself; do NOT ask clarifying questions.
+Process <STAGED_PATH> headlessly. Make all judgment calls yourself; do NOT
+ask clarifying questions.
 
 Input format:
   .pdf            primary document
@@ -17,8 +17,8 @@ Input format:
   .txt / .url     fetch the contained URL as a web source
 
 Frontmatter must include `tldr: "..."` — one sentence (~25 words), stands
-alone without context. Set `source_type:` accurately so the skill adapts
-its sections (e.g., omit Methodology for non-empirical sources).
+alone without context. Set `source_type:` accurately and adapt the summary's
+sections to it (e.g., omit Methodology for non-empirical sources).
 
 For the Relevance section: 2-4 hedged connections to topics the existing
 library covers ("plausibly relevant to..."). If you can't infer one,
