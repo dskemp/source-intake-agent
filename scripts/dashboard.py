@@ -1443,9 +1443,10 @@ PREPRINTS_TEMPLATE = """<!doctype html>
 {{ font_link | safe }}
 {{ shared_styles | safe }}
 <style>
-  .conf-high { color: var(--color-success-700); font-weight: 600; }
-  .conf-medium { color: var(--color-warning-700); font-weight: 600; }
-  .conf-low { color: var(--color-text-faint); font-weight: 600; }
+  .conf-meter { display: inline-flex; gap: 2px; vertical-align: middle; margin-right: var(--space-2); }
+  .conf-meter .seg { display: inline-block; width: 5px; height: 12px; background: var(--color-border); border-radius: 1px; }
+  .conf-meter .seg.on { background: var(--color-text); }
+  .conf-label { font-weight: 600; }
   .venue { font-style: italic; }
   .note { color: var(--color-text-faint); font-size: 0.85rem; }
 </style>
@@ -1519,7 +1520,7 @@ PREPRINTS_TEMPLATE = """<!doctype html>
             {% if e.doi %} · DOI <code>{{ e.doi }}</code>{% endif %}
           </div>
         </td>
-        <td><span class="conf-{{ e.confidence or 'low' }}">{{ (e.confidence or 'low')|capitalize }}</span>{% if e.match_score %} <span class="mute">{{ '%.2f'|format(e.match_score) }}</span>{% endif %}</td>
+        <td>{% set _conf = e.confidence or 'low' %}{% set _filled = {'high': 3, 'medium': 2, 'low': 1}.get(_conf, 1) %}<span class="conf-meter" aria-hidden="true">{% for i in range(3) %}<span class="seg{% if i < _filled %} on{% endif %}"></span>{% endfor %}</span><span class="conf-label">{{ _conf|capitalize }}</span>{% if e.match_score %} <span class="mute">{{ '%.2f'|format(e.match_score) }}</span>{% endif %}</td>
         <td class="mute">{{ e.checked_ago }}</td>
       </tr>
       {% endfor %}
