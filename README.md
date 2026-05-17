@@ -1,17 +1,83 @@
 # Source-Intake Agent
 
-A macOS automation that watches a folder, runs Claude Code headlessly on
-each dropped file, and files the resulting summary into a personal research
-library — no human in the loop. Domain-agnostic:
-configure it once with a description of what your library covers (legal AI
-papers, cooking recipes, tech-industry news, climate policy, etc.) and the
-LLM adapts category choices, tagging, section framing, and tone to fit.
+> A macOS tool that turns a folder of PDFs into a searchable research library — automatically.
 
-Drop a PDF (or a `.txt` containing a URL, or a saved `.md`/`.html` snapshot)
-into your inbox folder → wait → it shows up in
-`<library>/<category>/<slug>/` with a structured `.summary.md`,
-the index regenerates, and the input file is removed. Failures land in
-`_failed/` with a log sidecar; duplicates land in `_duplicate/`.
+![Source-Intake Agent dashboard home, showing recent runs with cost and duration](docs/images/hero-dashboard.png)
+
+## What this is
+
+Drop a research paper, an article URL, or a saved webpage into a folder on
+your Mac. In the background, Claude Code reads it, writes a structured
+summary, and files everything into a personal library — organized, tagged,
+and searchable. You configure once what kind of library you're building
+(research papers, recipes, news clippings, climate policy — whatever), and
+the LLM adapts its category choices, tag vocabulary, section framing, and
+tone to fit.
+
+Everything runs locally on your own machine. Your library lives in a folder
+you own: browse it in Finder, edit summaries in any text editor, and keep
+it forever even if you stop using this tool.
+
+## How it works
+
+**1. Drop a file in your inbox folder.**
+
+PDFs work directly. URLs can be dropped as a plain `.txt` file. Saved
+webpages (`.md` or `.html`) work too. You can do this from Finder, the
+command line, a browser's "Save as," or any other way you'd put a file in a
+folder — the tool doesn't care how it gets there.
+
+**2. The agent reads it in the background.**
+
+![The dashboard mid-run, showing the live activity log streaming from Claude](docs/images/step2-processing.png)
+
+No clicking around. A folder watcher notices the new file and the agent
+starts automatically. Watch progress in the dashboard at
+`http://localhost:7341`, or just walk away — runs typically take a few
+minutes per source and the dashboard remembers everything.
+
+**3. A structured summary lands in your library.**
+
+![The library page listing all sources, grouped by category, with tags and a TL;DR](docs/images/step3-library.png)
+
+Each source gets its own folder with a markdown summary, the original PDF,
+and metadata you can search by title, author, tag, category, or TL;DR.
+Institutional authors (think *U.S. Government Accountability Office* or
+*OECD*) are recognized as organizations and displayed in full.
+
+![A single rendered summary, with citation, tags, and key claims](docs/images/step4-summary.png)
+
+Summaries are plain markdown with structured YAML frontmatter — readable on
+their own, but also queryable as data. Nothing is hidden in a proprietary
+database; if you stop using the tool tomorrow, you keep every file.
+
+**4. Built-in audit and preprint tools keep things tidy.**
+
+![The audit page cross-checking the library against what's on disk](docs/images/audit.png)
+
+The audit page catches stale index entries, summaries missing their original
+PDF, and unparseable frontmatter — useful when you've been editing the
+library by hand or moving things around.
+
+![The preprints page, with a confidence meter on each peer-reviewed match](docs/images/preprints.png)
+
+For academic libraries, a weekly check against [OpenAlex](https://openalex.org)
+flags arXiv and SSRN preprints that have since appeared in a peer-reviewed
+venue. Confidence is shown as a signal-bar meter — the tool surfaces matches
+for your review and never overwrites your summaries automatically.
+
+## Who is this for?
+
+- **Researchers and academics** building a personal knowledge base from papers.
+- **Writers and analysts** who collect articles and reports and want them summarized and searchable.
+- **Hobbyists with a folder of PDFs** they wish they could actually find things in.
+- **Anyone curious about agent automation** — a small, readable example of headless Claude Code wired into a real workflow.
+
+If you're on macOS, comfortable running a one-time install script in your
+terminal, and have an [Anthropic API key](https://docs.anthropic.com/en/api/getting-started),
+you're set.
+
+---
 
 > **You choose where the library and inbox live, and what they're for.**
 > Defaults are `~/source-library`, `~/source-library-inbox`, and a generic
@@ -379,6 +445,19 @@ The script walks the library, hashes each summary's sibling `<slug>.pdf` (or
 `.snapshot.md`), and inserts the hash into the frontmatter. Idempotent — safe
 to re-run.
 
+If your library has institutional sources (GAO, ABA, OECD, etc.) filed
+before the library page learned to render them in full, also run:
+
+```sh
+LIBRARY_PATH=$LIBRARY ~/.config/claude-source-intake/venv/bin/python \
+  scripts/migrate-institutional-authors.py            # dry-run
+  # --apply                                           # actually write changes
+```
+
+The script copies `publication:` into `authors:` for summaries where the
+publication is recognized as an organization and `authors:` is empty.
+Defaults to dry-run; idempotent.
+
 ## Library schema
 
 Each summary has YAML frontmatter; the auto-generated `INDEX.md` is built from
@@ -454,7 +533,8 @@ source-intake-agent/
 │   ├── regen-index.py
 │   ├── check-preprints.py    ← OpenAlex lookup for arXiv/SSRN promotion
 │   ├── detect-promotion.py   ← worker hook: match dropped PDF to a tracked preprint
-│   └── backfill-hashes.py    ← one-shot: add source_hash to existing summaries
+│   ├── backfill-hashes.py    ← one-shot: add source_hash to existing summaries
+│   └── migrate-institutional-authors.py  ← one-shot: normalize org-authored summaries
 ├── launchd/
 │   ├── worker.plist.template
 │   ├── dashboard.plist.template
@@ -463,3 +543,12 @@ source-intake-agent/
     └── prompt.txt               ← default autonomy prompt; __LIBRARY__ token
                                     is substituted on first install
 ```
+
+## License
+
+[MIT](LICENSE) — do what you like, no warranty.
+
+## Found a problem or have a question?
+
+Open an issue: <https://github.com/dskemp/source-intake-agent/issues/new/choose>.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for templates and guidelines.

@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: README
+    url: https://github.com/dskemp/source-intake-agent#readme
+    about: Most setup, configuration, and troubleshooting questions are answered in the README. Worth a glance before filing.
