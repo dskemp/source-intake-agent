@@ -1056,7 +1056,8 @@ SOURCE_TEMPLATE = """<!doctype html>
 {{ font_link | safe }}
 {{ shared_styles | safe }}
 <style>
-  body { max-width: 780px; padding-top: var(--space-6); padding-bottom: var(--space-12); }
+  body { padding-top: var(--space-6); padding-bottom: var(--space-12); }
+  .reading-column { max-width: 780px; margin: 0 auto; }
   .back-link { display: inline-block; margin-bottom: var(--space-4); font-family: var(--font-ui); font-size: 0.85rem; color: var(--color-text-muted); }
   .back-link:hover { color: var(--color-primary); }
   .viewer-header { margin-bottom: var(--space-6); padding-bottom: var(--space-4); border-bottom: 1px solid var(--color-border); }
@@ -1089,6 +1090,7 @@ SOURCE_TEMPLATE = """<!doctype html>
 </head>
 <body>
 {{ nav | safe }}
+<div class="reading-column">
 <a class="back-link" href="/library">← Back to Library</a>
 
 <div class="viewer-header">
@@ -1120,6 +1122,7 @@ SOURCE_TEMPLATE = """<!doctype html>
     <input type="hidden" name="rel_path" value="{{ rel_path }}">
     <button type="submit" class="danger">Delete source</button>
   </form>
+</div>
 </div>
 </body>
 </html>"""
