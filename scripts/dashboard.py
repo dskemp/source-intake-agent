@@ -594,6 +594,7 @@ SHARED_STYLES = """<link rel="stylesheet" href="https://assets.davidkemp.ai/toke
   --color-surface-page: #FAFAF7;
 }
 * { box-sizing: border-box; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
 body { font-family: var(--font-ui); font-size: 14px; line-height: 1.5; background: var(--color-surface-page); color: var(--color-text); margin: 0; padding: var(--space-8); max-width: var(--width-wide); margin-left: auto; margin-right: auto; -webkit-font-smoothing: antialiased; font-feature-settings: "kern", "liga"; }
 h1 { font-family: var(--font-ui); font-size: 1.75rem; font-weight: 600; letter-spacing: -0.015em; margin: 0 0 var(--space-2); color: var(--color-primary); }
 h2 { font-family: var(--font-ui); font-size: 0.78rem; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--color-text-faint); margin: var(--space-8) 0 var(--space-3); }
@@ -649,13 +650,13 @@ details summary { cursor: pointer; color: var(--color-primary-hover); font-size:
 details summary:hover { color: var(--color-primary); }
 details.settings { margin-top: var(--space-4); padding: var(--space-5); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-lg); box-shadow: var(--shadow-1); }
 details.settings summary { color: var(--color-text); font-weight: 600; font-size: 0.95rem; }
-pre { background: #1A202C; color: #E2E8F0; padding: var(--space-3) var(--space-4); border-radius: var(--radius-md); overflow-x: auto; font-size: 0.8rem; line-height: 1.5; max-height: 300px; }
-.livelog { background: #1A202C; color: #E2E8F0; font-family: var(--font-mono); font-size: 0.78rem; line-height: 1.55; padding: var(--space-3) var(--space-4); border-radius: var(--radius-md); max-height: 22rem; overflow-y: auto; border: 1px solid var(--color-border); }
-.livelog .ev { display: flex; gap: var(--space-2); padding: 0.2rem 0; border-bottom: 1px solid #2D3748; }
+pre { background: var(--color-neutral-900); color: var(--color-neutral-200); padding: var(--space-3) var(--space-4); border-radius: var(--radius-md); overflow-x: auto; font-size: 0.8rem; line-height: 1.5; max-height: 300px; }
+.livelog { background: var(--color-neutral-900); color: var(--color-neutral-200); font-family: var(--font-mono); font-size: 0.78rem; line-height: 1.55; padding: var(--space-3) var(--space-4); border-radius: var(--radius-md); max-height: 22rem; overflow-y: auto; border: 1px solid var(--color-border); }
+.livelog .ev { display: flex; gap: var(--space-2); padding: 0.2rem 0; border-bottom: 1px solid var(--color-neutral-800); }
 .livelog .ev:last-child { border-bottom: none; }
 .livelog .ev .icon { width: 1.6rem; flex-shrink: 0; text-align: center; }
 .livelog .ev .text { white-space: pre-wrap; word-break: break-word; flex: 1; }
-.livelog .empty { padding: var(--space-2); opacity: 0.6; color: #A0AEC0; }
+.livelog .empty { padding: var(--space-2); opacity: 0.6; color: var(--color-neutral-400); }
 .paths { font-size: 0.85rem; color: var(--color-text-muted); }
 .paths > div { padding: 0.1rem 0; }
 .paths code { font-size: 0.85rem; background: var(--color-surface-alt); padding: 0.1rem 0.35rem; border-radius: var(--radius-sm); color: var(--color-text-muted); }
@@ -686,15 +687,13 @@ pre { background: #1A202C; color: #E2E8F0; padding: var(--space-3) var(--space-4
 
 
 def nav_html(active: str) -> str:
-    home_class = ' class="active"' if active == "home" else ""
-    lib_class = ' class="active"' if active == "library" else ""
-    audit_class = ' class="active"' if active == "audit" else ""
-    preprints_class = ' class="active"' if active == "preprints" else ""
-    return f"""<nav class="topnav">
-  <a href="/"{home_class}>Source Intake</a>
-  <a href="/library"{lib_class}>Library</a>
-  <a href="/preprints"{preprints_class}>Preprints</a>
-  <a href="/audit"{audit_class}>Audit</a>
+    def attrs(name: str) -> str:
+        return ' class="active" aria-current="page"' if active == name else ""
+    return f"""<nav class="topnav" aria-label="Primary">
+  <a href="/"{attrs("home")}>Source Intake</a>
+  <a href="/library"{attrs("library")}>Library</a>
+  <a href="/preprints"{attrs("preprints")}>Preprints</a>
+  <a href="/audit"{attrs("audit")}>Audit</a>
 </nav>"""
 
 
@@ -709,6 +708,7 @@ TEMPLATE = """<!doctype html>
 </head>
 <body>
 {{ nav | safe }}
+<main>
 <h1>Source Intake</h1>
 {% if domain %}<p class="tagline">{{ domain }}</p>{% endif %}
 
@@ -866,9 +866,9 @@ TEMPLATE = """<!doctype html>
 
 <details class="settings">
   <summary>Settings</summary>
-  <h2 style="margin-top:1rem">Autonomy prompt</h2>
+  <h2 style="margin-top:1rem"><label for="prompt-content">Autonomy prompt</label></h2>
   <form method="post" action="/prompt">
-    <textarea name="content">{{ prompt }}</textarea>
+    <textarea id="prompt-content" name="content">{{ prompt }}</textarea>
     <p style="margin-top:.5rem"><button class="primary">Save prompt</button>
       <span class="mute">Stored at <code>{{ prompt_path }}</code></span></p>
   </form>
@@ -949,6 +949,7 @@ setInterval(async () => {
 }, 3000);
 </script>
 
+</main>
 </body>
 </html>"""
 
@@ -1004,20 +1005,23 @@ LIBRARY_TEMPLATE = """<!doctype html>
   .controls input[type=search] { flex: 1; max-width: 30rem; font-size: 0.95rem; }
   .tldr { font-size: 0.92rem; line-height: 1.55; color: var(--color-text-muted); font-family: var(--font-ui); }
   .tags { margin-top: var(--space-2); display: flex; flex-wrap: wrap; gap: 0.3rem; }
-  .tag { display: inline-block; padding: 0.1rem 0.5rem; background: var(--color-primary-50); color: var(--color-primary); border-radius: var(--radius-sm); font-size: 0.72rem; font-weight: 500; cursor: pointer; font-family: var(--font-ui); transition: background 100ms; }
+  .tag { display: inline-block; padding: 0.1rem 0.5rem; background: var(--color-primary-50); color: var(--color-primary); border: 0; border-radius: var(--radius-sm); font-size: 0.72rem; font-weight: 500; cursor: pointer; font-family: var(--font-ui); transition: background 100ms; }
   .tag:hover { background: #DBE5F0; }
+  button.tag:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
   .hidden { display: none !important; }
 </style>
 </head>
 <body>
 {{ nav | safe }}
+<main>
 <h1>Library <span class="h-suffix">— {{ total }} sources across {{ by_cat|length }} {{ 'category' if by_cat|length == 1 else 'categories' }}</span></h1>
 {% if domain %}<p class="tagline">{{ domain }}</p>{% endif %}
 
 {% if flash %}<div class="flash">{{ flash }}</div>{% endif %}
 
 <div class="controls">
-  <input id="filter" type="search" placeholder="Filter by title, tldr, author, tag, category…" autofocus>
+  <label for="filter" class="sr-only">Filter sources</label>
+  <input id="filter" type="search" placeholder="Filter by title, tldr, author, tag, category…">
   <span class="mute" id="match-count"></span>
 </div>
 
@@ -1039,7 +1043,7 @@ LIBRARY_TEMPLATE = """<!doctype html>
             {% if s.url %} · <a href="{{ s.url }}" target="_blank" rel="noopener">url ↗</a>{% endif %}
             {% if s.source_file %} · <a href="/file/{{ s.source_file.rel_path|urlencode }}" target="_blank" rel="noopener">{{ s.source_file.kind }} ↗</a>{% endif %}
           </div>
-          <div class="tags">{% for t in s.tags %}<span class="tag" onclick="setFilter('{{ t|e }}')">{{ t }}</span>{% endfor %}</div>
+          <div class="tags">{% for t in s.tags %}<button type="button" class="tag" data-tag="{{ t }}">{{ t }}</button>{% endfor %}</div>
         </td>
         <td class="tldr">{{ s.tldr or '—' }}</td>
         <td class="mute">{{ s.year or '—' }}</td>
@@ -1094,7 +1098,12 @@ function applyFilter() {
 }
 filterEl.addEventListener('input', applyFilter);
 function setFilter(v) { filterEl.value = v; applyFilter(); filterEl.focus(); }
+document.addEventListener('click', e => {
+  const t = e.target.closest('.tag[data-tag]');
+  if (t) setFilter(t.dataset.tag);
+});
 </script>
+</main>
 </body>
 </html>"""
 
@@ -1170,6 +1179,7 @@ SOURCE_TEMPLATE = """<!doctype html>
 </head>
 <body>
 {{ nav | safe }}
+<main>
 <div class="reading-column">
 <a class="back-link" href="/library">← Back to Library</a>
 
@@ -1204,6 +1214,7 @@ SOURCE_TEMPLATE = """<!doctype html>
   </form>
 </div>
 </div>
+</main>
 </body>
 </html>"""
 
@@ -1434,13 +1445,14 @@ PREPRINTS_TEMPLATE = """<!doctype html>
 <style>
   .conf-high { color: var(--color-success-700); font-weight: 600; }
   .conf-medium { color: var(--color-warning-700); font-weight: 600; }
-  .conf-low { color: var(--color-error-700); font-weight: 600; }
+  .conf-low { color: var(--color-text-faint); font-weight: 600; }
   .venue { font-style: italic; }
   .note { color: var(--color-text-faint); font-size: 0.85rem; }
 </style>
 </head>
 <body>
 {{ nav | safe }}
+<main>
 <h1>Preprint check <span class="h-suffix">— peer-review tracking for arXiv / SSRN sources</span></h1>
 <p class="tagline">For each preprint in the library, checks OpenAlex weekly for a peer-reviewed version. Conservative by design: low/medium confidence findings are flagged for your review, not auto-applied.</p>
 
@@ -1588,6 +1600,7 @@ PREPRINTS_TEMPLATE = """<!doctype html>
 
 {% endif %}
 
+</main>
 </body>
 </html>"""
 
@@ -1706,6 +1719,7 @@ AUDIT_TEMPLATE = """<!doctype html>
 </head>
 <body>
 {{ nav | safe }}
+<main>
 <h1>Library audit</h1>
 <p class="tagline">Cross-checks <code>INDEX.md</code> against what's on disk and flags missing originals or broken frontmatter.</p>
 
@@ -1847,6 +1861,7 @@ AUDIT_TEMPLATE = """<!doctype html>
   </table></div>
 </details>
 {% endif %}
+</main>
 </body>
 </html>"""
 
