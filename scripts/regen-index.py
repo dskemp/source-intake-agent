@@ -5,6 +5,7 @@ Walks the library, reads `.summary.md` files, groups by their folder
 category, and writes a single INDEX.md.
 """
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -76,13 +77,83 @@ def category_order(by_cat: dict) -> list[str]:
     return ordered + extras
 
 
+# Heuristics for distinguishing institutional authors (e.g. "U.S. Government
+# Accountability Office") from individuals ("Vaswani, Ashish"). Keep these
+# definitions in sync with the copy in dashboard.py.
+_ORG_KEYWORDS = re.compile(
+    r"\b("
+    r"Office|Agency|Bureau|Committee|Commission|Council|Board|Authority|"
+    r"Department|Ministry|Administration|"
+    r"Association|Foundation|Society|Federation|Alliance|Coalition|Union|Trust|"
+    r"Institute|Institution|Center|Centre|Forum|Initiative|Programme|"
+    r"University|College|Law School|"
+    r"Corporation|Company|Lab|Laboratory|"
+    r"Court|Tribunal|"
+    r"State Bar|"
+    r"Inc\.?|LLC|Ltd\.?|PLC|GmbH"
+    r")\b"
+)
+
+_ORG_PHRASES = re.compile(r"\b(School of|Bar Association)\b")
+
+_KNOWN_ORGS = {
+    "GAO", "OECD", "IMF", "WHO", "UN", "EU",
+    "NIST", "NASA", "NIH", "FDA", "EPA", "FBI", "DOJ", "CDC", "FCC", "SEC",
+    "ABA", "NYCBA", "ACLU", "USPTO", "OPM", "BLS",
+    "Anthropic", "OpenAI", "Google DeepMind", "DeepMind", "Microsoft Research",
+}
+
+_VENUE_HINTS = re.compile(
+    r"\b("
+    r"arXiv|preprint|SSRN|"
+    r"Journal|Review|Transactions|Letters|Proceedings|Conference|Workshop|"
+    r"Nature|Cell|Science|JAMA|Lancet|"
+    r"ICML|ICLR|NeurIPS|EMNLP|ACL|TACL|PMLR|COLM"
+    r")\b"
+)
+
+
+def is_institutional_author(name: str) -> bool:
+    """Return True if `name` looks like an organization, not an individual.
+
+    Heuristic priority:
+    1. Known-org acronym / short name -> True
+    2. Contains a venue hint (arXiv, Nature, ICML...) -> False  (defensive: a
+       venue string accidentally listed in authors: should not be treated as
+       an institution)
+    3. Contains an org keyword (Office, Bureau, Association...) -> True
+    4. No comma AND >=4 words -> True (multi-word non-person names)
+    5. Otherwise -> False
+    """
+    n = name.strip()
+    if not n:
+        return False
+    if n in _KNOWN_ORGS:
+        return True
+    if _VENUE_HINTS.search(n):
+        return False
+    if _ORG_KEYWORDS.search(n) or _ORG_PHRASES.search(n):
+        return True
+    if "," not in n and len(n.split()) >= 4:
+        return True
+    return False
+
+
+def _display_author(name: str) -> str:
+    if is_institutional_author(name):
+        return name
+    if "," in name:
+        return name.split(",", 1)[0].strip()
+    return name.split()[-1]
+
+
 def render_authors(authors: list[str], max_shown: int = 4) -> str:
     if not authors:
         return ""
-    surnames = [a.split(",")[0].strip() if "," in a else a.split()[-1] for a in authors]
-    if len(surnames) <= max_shown:
-        return ", ".join(surnames)
-    return ", ".join(surnames[:max_shown]) + " et al."
+    displayed = [_display_author(a) for a in authors]
+    if len(displayed) <= max_shown:
+        return ", ".join(displayed)
+    return ", ".join(displayed[:max_shown]) + " et al."
 
 
 def render_index(by_cat: dict, library: Path) -> str:

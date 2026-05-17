@@ -388,13 +388,73 @@ def regen_index_now(timeout: int = 30) -> tuple[bool, str]:
     return True, (r.stdout or "INDEX.md regenerated").strip()
 
 
+# Heuristics for distinguishing institutional authors (e.g. "U.S. Government
+# Accountability Office") from individuals ("Vaswani, Ashish"). Keep these
+# definitions in sync with the copy in regen-index.py.
+_ORG_KEYWORDS = re.compile(
+    r"\b("
+    r"Office|Agency|Bureau|Committee|Commission|Council|Board|Authority|"
+    r"Department|Ministry|Administration|"
+    r"Association|Foundation|Society|Federation|Alliance|Coalition|Union|Trust|"
+    r"Institute|Institution|Center|Centre|Forum|Initiative|Programme|"
+    r"University|College|Law School|"
+    r"Corporation|Company|Lab|Laboratory|"
+    r"Court|Tribunal|"
+    r"State Bar|"
+    r"Inc\.?|LLC|Ltd\.?|PLC|GmbH"
+    r")\b"
+)
+
+_ORG_PHRASES = re.compile(r"\b(School of|Bar Association)\b")
+
+_KNOWN_ORGS = {
+    "GAO", "OECD", "IMF", "WHO", "UN", "EU",
+    "NIST", "NASA", "NIH", "FDA", "EPA", "FBI", "DOJ", "CDC", "FCC", "SEC",
+    "ABA", "NYCBA", "ACLU", "USPTO", "OPM", "BLS",
+    "Anthropic", "OpenAI", "Google DeepMind", "DeepMind", "Microsoft Research",
+}
+
+_VENUE_HINTS = re.compile(
+    r"\b("
+    r"arXiv|preprint|SSRN|"
+    r"Journal|Review|Transactions|Letters|Proceedings|Conference|Workshop|"
+    r"Nature|Cell|Science|JAMA|Lancet|"
+    r"ICML|ICLR|NeurIPS|EMNLP|ACL|TACL|PMLR|COLM"
+    r")\b"
+)
+
+
+def is_institutional_author(name: str) -> bool:
+    """Return True if `name` looks like an organization, not an individual."""
+    n = name.strip()
+    if not n:
+        return False
+    if n in _KNOWN_ORGS:
+        return True
+    if _VENUE_HINTS.search(n):
+        return False
+    if _ORG_KEYWORDS.search(n) or _ORG_PHRASES.search(n):
+        return True
+    if "," not in n and len(n.split()) >= 4:
+        return True
+    return False
+
+
+def _display_author(name: str) -> str:
+    if is_institutional_author(name):
+        return name
+    if "," in name:
+        return name.split(",", 1)[0].strip()
+    return name.split()[-1]
+
+
 def short_authors(authors, max_shown=3):
     if not authors:
         return ""
-    surnames = [a.split(",")[0].strip() if "," in a else a.split()[-1] for a in authors]
-    if len(surnames) <= max_shown:
-        return ", ".join(surnames)
-    return ", ".join(surnames[:max_shown]) + " et al."
+    displayed = [_display_author(a) for a in authors]
+    if len(displayed) <= max_shown:
+        return ", ".join(displayed)
+    return ", ".join(displayed[:max_shown]) + " et al."
 
 
 def parse_event(line: str):
