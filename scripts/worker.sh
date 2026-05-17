@@ -533,6 +533,11 @@ EOF
     log "  failed to stage '$base' (already claimed?)"
     continue
   fi
+  # Bump mtime to "processing start" — mv preserves the source file's mtime,
+  # so without this the dashboard's elapsed-time ticker (derived from the
+  # staged file's mtime) reports "time since the PDF was downloaded" instead
+  # of "time spent processing this job."
+  touch "$staged_path"
 
   sentinel=$(mktemp -t intake-sentinel)
   touch "$sentinel"
