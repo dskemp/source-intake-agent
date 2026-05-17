@@ -106,6 +106,7 @@ Configuration is layered — later sources override earlier ones:
 | `CLAUDE_BIN`     | `$(command -v claude)`        | Path to the `claude` CLI binary               |
 | `CATEGORY_ORDER` | *(empty — alphabetical)*      | Comma-separated preferred sort for categories |
 | `OPENALEX_EMAIL` | *(empty — anonymous)*         | Opts the weekly preprint check into OpenAlex's polite pool |
+| `DASHBOARD_EXTRA_ORIGINS` | *(empty)*            | Comma-separated extra browser origins permitted to POST to the dashboard (CSRF allowlist); 127.0.0.1 and localhost are always allowed |
 
 Recommended workflow: keep your real paths in `.env` (which is `.gitignore`d)
 so they never leak into commit history.

@@ -31,6 +31,8 @@
         <string>__CATEGORY_ORDER__</string>
         <key>DOMAIN</key>
         <string>__DOMAIN__</string>
+        <key>DASHBOARD_EXTRA_ORIGINS</key>
+        <string>__DASHBOARD_EXTRA_ORIGINS__</string>
     </dict>
 </dict>
 </plist>

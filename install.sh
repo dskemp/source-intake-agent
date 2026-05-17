@@ -33,6 +33,9 @@ Configuration (lowest to highest precedence):
   CATEGORY_ORDER=                      optional, comma-separated category sort
   OPENALEX_EMAIL=                      optional, opts the weekly preprint
                                        check into OpenAlex's polite pool
+  DASHBOARD_EXTRA_ORIGINS=             optional, comma-separated list of extra
+                                       browser origins permitted to POST to
+                                       the dashboard (CSRF allowlist)
 USAGE
       exit 0 ;;
     *) echo "unknown arg: $arg" >&2; exit 2 ;;
@@ -57,6 +60,7 @@ CLAUDE_BIN="${CLAUDE_BIN:-$(command -v claude || true)}"
 CATEGORY_ORDER="${CATEGORY_ORDER:-}"
 DOMAIN="${DOMAIN:-A general-purpose personal research library.}"
 OPENALEX_EMAIL="${OPENALEX_EMAIL:-}"
+DASHBOARD_EXTRA_ORIGINS="${DASHBOARD_EXTRA_ORIGINS:-}"
 
 # Expand leading "~/" since shell parameter expansion doesn't.
 expand_tilde() { printf '%s' "${1/#\~\//$HOME/}"; }
@@ -85,6 +89,7 @@ say "library:   $LIBRARY"
 say "inbox:     $INBOX"
 say "labels:    ${LABEL_PREFIX}.*"
 say "domain:    $DOMAIN"
+[[ -n "$DASHBOARD_EXTRA_ORIGINS" ]] && say "origins:   $DASHBOARD_EXTRA_ORIGINS"
 say "mode:      $([[ $LINK_MODE == 1 ]] && echo 'symlink (single source of truth)' || echo 'copy')"
 
 # --- Directories --------------------------------------------------------------
@@ -155,6 +160,7 @@ render_plist() {
       -e "s|__CATEGORY_ORDER__|${CATEGORY_ORDER}|g" \
       -e "s|__DOMAIN__|${domain_esc}|g" \
       -e "s|__OPENALEX_EMAIL__|${OPENALEX_EMAIL}|g" \
+      -e "s|__DASHBOARD_EXTRA_ORIGINS__|${DASHBOARD_EXTRA_ORIGINS}|g" \
       "$src" > "$dest"
   plutil -lint "$dest" >/dev/null
 }
