@@ -601,6 +601,14 @@ pre { background: #1A202C; color: #E2E8F0; padding: var(--space-3) var(--space-4
 .paths a { color: var(--color-primary-hover); text-decoration: none; }
 .paths a:hover code { background: var(--color-primary-50); color: var(--color-primary); }
 .cats { margin-top: var(--space-2); font-family: var(--font-mono); font-size: 0.85rem; color: var(--color-text-muted); }
+.title { font-family: var(--font-ui); font-weight: 600; font-size: 1rem; line-height: 1.4; }
+.title a { color: var(--color-text); text-decoration: none; }
+.title a:hover { color: var(--color-primary); text-decoration: none; }
+.meta { font-size: 0.82rem; color: var(--color-text-faint); margin-top: 0.2rem; }
+.meta a { color: var(--color-text-faint); }
+.meta a:hover { color: var(--color-text-muted); text-decoration: underline; }
+.issue-section { margin-top: var(--space-6); }
+.issue-section .desc { color: var(--color-text-muted); font-size: 0.9rem; margin: var(--space-2) 0 var(--space-3); }
 .summary-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: var(--space-3); margin: var(--space-4) 0 var(--space-6); }
 .tile { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: var(--space-4); box-shadow: var(--shadow-1); }
 .tile .n { font-family: var(--font-ui); font-size: 1.8rem; font-weight: 600; color: var(--color-primary); line-height: 1.1; }
@@ -852,7 +860,16 @@ if (lastDetails) {
 }
 
 // Auto-refresh: re-poll /api/status every 3s and reload if anything changed.
-// Tighter cadence (3s) so completion-of-run shows up promptly.
+// Tighter cadence (3s) so completion-of-run shows up promptly. We skip the reload
+// while the user is touching the prompt textarea (focused or dirty) so a status
+// change mid-edit doesn't blow away their work.
+const promptEl = document.querySelector('textarea[name="content"]');
+const promptOriginal = promptEl ? promptEl.value : "";
+function userBusy() {
+  if (!promptEl) return false;
+  if (document.activeElement === promptEl) return true;
+  return promptEl.value !== promptOriginal;
+}
 let lastSig = "{{ status.runs|length }}-{{ status.queue_inbox|length }}-{{ status.queue_staged|length }}-{{ status.strays|length }}-{{ status.failed|length }}-{{ status.duplicates|length }}-{{ 'p' if status.paused else 'w' }}-{{ 'r' if status.running else 'i' }}";
 setInterval(async () => {
   try {
@@ -860,7 +877,7 @@ setInterval(async () => {
     if (!r.ok) return;
     const s = await r.json();
     const sig = `${s.runs.length}-${s.queue_inbox.length}-${s.queue_staged.length}-${(s.strays||[]).length}-${s.failed.length}-${(s.duplicates||[]).length}-${s.paused ? 'p' : 'w'}-${s.running ? 'r' : 'i'}`;
-    if (sig !== lastSig) location.reload();
+    if (sig !== lastSig && !userBusy()) location.reload();
   } catch (_) {}
 }, 3000);
 </script>
@@ -917,13 +934,7 @@ LIBRARY_TEMPLATE = """<!doctype html>
 <style>
   .controls { position: sticky; top: 0; background: var(--color-surface-page); padding: var(--space-3) 0; z-index: 5; display: flex; gap: var(--space-4); align-items: center; border-bottom: 1px solid var(--color-border); margin-bottom: var(--space-4); }
   .controls input[type=search] { flex: 1; max-width: 30rem; font-size: 0.95rem; }
-  .title { font-family: var(--font-ui); font-weight: 600; font-size: 1rem; line-height: 1.4; }
-  .title a { color: var(--color-text); text-decoration: none; }
-  .title a:hover { color: var(--color-primary); text-decoration: none; }
   .tldr { font-size: 0.92rem; line-height: 1.55; color: var(--color-text-muted); font-family: var(--font-ui); }
-  .meta { font-size: 0.82rem; color: var(--color-text-faint); margin-top: 0.2rem; }
-  .meta a { color: var(--color-text-faint); }
-  .meta a:hover { color: var(--color-text-muted); text-decoration: underline; }
   .tags { margin-top: var(--space-2); display: flex; flex-wrap: wrap; gap: 0.3rem; }
   .tag { display: inline-block; padding: 0.1rem 0.5rem; background: var(--color-primary-50); color: var(--color-primary); border-radius: var(--radius-sm); font-size: 0.72rem; font-weight: 500; cursor: pointer; font-family: var(--font-ui); transition: background 100ms; }
   .tag:hover { background: #DBE5F0; }
@@ -1056,7 +1067,7 @@ SOURCE_TEMPLATE = """<!doctype html>
 {{ font_link | safe }}
 {{ shared_styles | safe }}
 <style>
-  body { padding-top: var(--space-6); padding-bottom: var(--space-12); }
+  body { padding-bottom: var(--space-12); }
   .reading-column { max-width: 780px; margin: 0 auto; }
   .back-link { display: inline-block; margin-bottom: var(--space-4); font-family: var(--font-ui); font-size: 0.85rem; color: var(--color-text-muted); }
   .back-link:hover { color: var(--color-primary); }
@@ -1620,8 +1631,6 @@ AUDIT_TEMPLATE = """<!doctype html>
 {{ shared_styles | safe }}
 <style>
   .all-clear { background: var(--color-success-100); border: 1px solid #C8E6C9; border-left: 4px solid var(--color-success-600); border-radius: var(--radius-md); padding: var(--space-4) var(--space-5); color: var(--color-success-700); margin: var(--space-4) 0; }
-  .issue-section { margin-top: var(--space-6); }
-  .issue-section .desc { color: var(--color-text-muted); font-size: 0.9rem; margin: var(--space-2) 0 var(--space-3); }
 </style>
 </head>
 <body>
