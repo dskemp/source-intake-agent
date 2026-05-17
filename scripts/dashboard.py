@@ -556,6 +556,7 @@ form { margin: 0; display: inline; }
 input[type=search], input[type=text], textarea { font: inherit; font-family: var(--font-ui); padding: var(--space-3) var(--space-4); border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-surface); color: var(--color-text); }
 input[type=search]:focus, input[type=text]:focus, textarea:focus { outline: 2px solid var(--color-accent); outline-offset: -1px; border-color: var(--color-accent); }
 textarea { width: 100%; min-height: 14rem; font-family: var(--font-mono); font-size: 0.85rem; line-height: 1.5; }
+.table-scroll { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); overflow: hidden; box-shadow: var(--shadow-1); }
 th, td { text-align: left; padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--color-border); vertical-align: top; }
 th { background: var(--color-primary-50); font-size: 0.74rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--color-text-faint); font-weight: 600; }
@@ -601,6 +602,14 @@ pre { background: #1A202C; color: #E2E8F0; padding: var(--space-3) var(--space-4
 .paths a { color: var(--color-primary-hover); text-decoration: none; }
 .paths a:hover code { background: var(--color-primary-50); color: var(--color-primary); }
 .cats { margin-top: var(--space-2); font-family: var(--font-mono); font-size: 0.85rem; color: var(--color-text-muted); }
+.title { font-family: var(--font-ui); font-weight: 600; font-size: 1rem; line-height: 1.4; }
+.title a { color: var(--color-text); text-decoration: none; }
+.title a:hover { color: var(--color-primary); text-decoration: none; }
+.meta { font-size: 0.82rem; color: var(--color-text-faint); margin-top: 0.2rem; }
+.meta a { color: var(--color-text-faint); }
+.meta a:hover { color: var(--color-text-muted); text-decoration: underline; }
+.issue-section { margin-top: var(--space-6); }
+.issue-section .desc { color: var(--color-text-muted); font-size: 0.9rem; margin: var(--space-2) 0 var(--space-3); }
 .summary-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: var(--space-3); margin: var(--space-4) 0 var(--space-6); }
 .tile { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: var(--space-4); box-shadow: var(--shadow-1); }
 .tile .n { font-family: var(--font-ui); font-size: 1.8rem; font-weight: 600; color: var(--color-primary); line-height: 1.1; }
@@ -608,6 +617,11 @@ pre { background: #1A202C; color: #E2E8F0; padding: var(--space-3) var(--space-4
 .tile.warn .n { color: var(--color-warning-700); }
 .tile.bad .n { color: var(--color-error-700); }
 .tile .label { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-text-faint); font-weight: 600; margin-top: var(--space-1); }
+@media (max-width: 640px) {
+  body { padding: var(--space-4); }
+  nav.topnav { flex-wrap: wrap; gap: var(--space-3); }
+  .strip { flex-wrap: wrap; }
+}
 </style>"""
 
 
@@ -628,6 +642,7 @@ TEMPLATE = """<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Source Intake</title>
 {{ font_link | safe }}
 {{ shared_styles | safe }}
@@ -667,7 +682,7 @@ TEMPLATE = """<!doctype html>
 
 <h2>Queue</h2>
 {% if status.queue_inbox or status.queue_staged %}
-<table>
+<div class="table-scroll"><table>
   <thead><tr><th>File</th><th>Where</th><th>Size</th><th>Modified</th></tr></thead>
   <tbody>
     {% for f in status.queue_inbox %}
@@ -677,14 +692,14 @@ TEMPLATE = """<!doctype html>
     <tr><td><code>{{ f.display }}</code></td><td><span class="dot running" style="vertical-align:middle"></span> processing</td><td>{{ f.size|filesizeformat }}</td><td>{{ f.mtime|tsfmt }}</td></tr>
     {% endfor %}
   </tbody>
-</table>
+</table></div>
 {% else %}
 <p class="empty">Empty — drop a file in <code>{{ inbox_path }}</code></p>
 {% endif %}
 
 <h2>Recent runs {% if status.total_cost %}<span class="h-suffix">— total ${{ '%.3f'|format(status.total_cost) }} across {{ status.runs|length }}</span>{% endif %}</h2>
 {% if status.runs %}
-<table>
+<div class="table-scroll"><table>
   <thead><tr><th style="width:12rem">When</th><th>Input</th><th>Outcome</th><th style="width:6rem">Cost</th><th style="width:5rem">Time</th><th>Output / error</th></tr></thead>
   <tbody>
     {% for r in status.runs %}
@@ -712,14 +727,14 @@ TEMPLATE = """<!doctype html>
     </tr>
     {% endfor %}
   </tbody>
-</table>
+</table></div>
 {% else %}
 <p class="empty">No runs yet.</p>
 {% endif %}
 
 {% if status.strays %}
 <h2>Stray files in .staged/ <span class="h-suffix">— not part of any active run</span></h2>
-<table>
+<div class="table-scroll"><table>
   <thead><tr><th>File</th><th>Size</th><th>Modified</th><th class="actions">Actions</th></tr></thead>
   <tbody>
     {% for f in status.strays %}
@@ -733,13 +748,13 @@ TEMPLATE = """<!doctype html>
     </tr>
     {% endfor %}
   </tbody>
-</table>
+</table></div>
 <p class="mute" style="margin-top:.5rem; font-size:.85rem">These files were left in <code>.staged/</code> without the UUID prefix the worker assigns to real jobs. The next worker tick will also sweep them automatically.</p>
 {% endif %}
 
 <h2>Failed items</h2>
 {% if status.failed %}
-<table>
+<div class="table-scroll"><table>
   <thead><tr><th>File</th><th>Size</th><th>Modified</th><th>Log</th><th class="actions">Actions</th></tr></thead>
   <tbody>
     {% for f in status.failed %}
@@ -755,14 +770,14 @@ TEMPLATE = """<!doctype html>
     </tr>
     {% endfor %}
   </tbody>
-</table>
+</table></div>
 {% else %}
 <p class="empty">Nothing has failed.</p>
 {% endif %}
 
 <h2>Duplicates</h2>
 {% if status.duplicates %}
-<table>
+<div class="table-scroll"><table>
   <thead><tr><th>File</th><th>Size</th><th>Detected</th><th>Matched</th><th class="actions">Actions</th></tr></thead>
   <tbody>
     {% for f in status.duplicates %}
@@ -777,7 +792,7 @@ TEMPLATE = """<!doctype html>
     </tr>
     {% endfor %}
   </tbody>
-</table>
+</table></div>
 <p class="mute" style="margin-top:.5rem; font-size:.85rem">A file lands here when its bytes (or URL, for <code>.txt</code>/<code>.url</code> inputs) match an existing summary's <code>source_hash:</code> or <code>url:</code>. To force a re-process, delete the matched summary first, then move the file from <code>_duplicate/</code> back to the inbox.</p>
 {% else %}
 <p class="empty">No duplicates detected.</p>
@@ -852,7 +867,16 @@ if (lastDetails) {
 }
 
 // Auto-refresh: re-poll /api/status every 3s and reload if anything changed.
-// Tighter cadence (3s) so completion-of-run shows up promptly.
+// Tighter cadence (3s) so completion-of-run shows up promptly. We skip the reload
+// while the user is touching the prompt textarea (focused or dirty) so a status
+// change mid-edit doesn't blow away their work.
+const promptEl = document.querySelector('textarea[name="content"]');
+const promptOriginal = promptEl ? promptEl.value : "";
+function userBusy() {
+  if (!promptEl) return false;
+  if (document.activeElement === promptEl) return true;
+  return promptEl.value !== promptOriginal;
+}
 let lastSig = "{{ status.runs|length }}-{{ status.queue_inbox|length }}-{{ status.queue_staged|length }}-{{ status.strays|length }}-{{ status.failed|length }}-{{ status.duplicates|length }}-{{ 'p' if status.paused else 'w' }}-{{ 'r' if status.running else 'i' }}";
 setInterval(async () => {
   try {
@@ -860,7 +884,7 @@ setInterval(async () => {
     if (!r.ok) return;
     const s = await r.json();
     const sig = `${s.runs.length}-${s.queue_inbox.length}-${s.queue_staged.length}-${(s.strays||[]).length}-${s.failed.length}-${(s.duplicates||[]).length}-${s.paused ? 'p' : 'w'}-${s.running ? 'r' : 'i'}`;
-    if (sig !== lastSig) location.reload();
+    if (sig !== lastSig && !userBusy()) location.reload();
   } catch (_) {}
 }, 3000);
 </script>
@@ -911,19 +935,14 @@ LIBRARY_TEMPLATE = """<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Library</title>
 {{ font_link | safe }}
 {{ shared_styles | safe }}
 <style>
   .controls { position: sticky; top: 0; background: var(--color-surface-page); padding: var(--space-3) 0; z-index: 5; display: flex; gap: var(--space-4); align-items: center; border-bottom: 1px solid var(--color-border); margin-bottom: var(--space-4); }
   .controls input[type=search] { flex: 1; max-width: 30rem; font-size: 0.95rem; }
-  .title { font-family: var(--font-ui); font-weight: 600; font-size: 1rem; line-height: 1.4; }
-  .title a { color: var(--color-text); text-decoration: none; }
-  .title a:hover { color: var(--color-primary); text-decoration: none; }
   .tldr { font-size: 0.92rem; line-height: 1.55; color: var(--color-text-muted); font-family: var(--font-ui); }
-  .meta { font-size: 0.82rem; color: var(--color-text-faint); margin-top: 0.2rem; }
-  .meta a { color: var(--color-text-faint); }
-  .meta a:hover { color: var(--color-text-muted); text-decoration: underline; }
   .tags { margin-top: var(--space-2); display: flex; flex-wrap: wrap; gap: 0.3rem; }
   .tag { display: inline-block; padding: 0.1rem 0.5rem; background: var(--color-primary-50); color: var(--color-primary); border-radius: var(--radius-sm); font-size: 0.72rem; font-weight: 500; cursor: pointer; font-family: var(--font-ui); transition: background 100ms; }
   .tag:hover { background: #DBE5F0; }
@@ -948,7 +967,7 @@ LIBRARY_TEMPLATE = """<!doctype html>
 {% if cat in by_cat %}
 <section data-cat="{{ cat }}">
   <h2>{{ cat }} <span class="h-suffix">({{ by_cat[cat]|length }})</span></h2>
-  <table>
+  <div class="table-scroll"><table>
     <thead><tr><th style="width:24%">Title</th><th>Tl;dr</th><th style="width:8%">Year</th><th style="width:5rem"></th></tr></thead>
     <tbody>
       {% for s in by_cat[cat] %}
@@ -974,7 +993,7 @@ LIBRARY_TEMPLATE = """<!doctype html>
       </tr>
       {% endfor %}
     </tbody>
-  </table>
+  </table></div>
 </section>
 {% endif %}
 {% endfor %}
@@ -1052,11 +1071,12 @@ SOURCE_TEMPLATE = """<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{ fm.title or rel_path }}</title>
 {{ font_link | safe }}
 {{ shared_styles | safe }}
 <style>
-  body { padding-top: var(--space-6); padding-bottom: var(--space-12); }
+  body { padding-bottom: var(--space-12); }
   .reading-column { max-width: 780px; margin: 0 auto; }
   .back-link { display: inline-block; margin-bottom: var(--space-4); font-family: var(--font-ui); font-size: 0.85rem; color: var(--color-text-muted); }
   .back-link:hover { color: var(--color-primary); }
@@ -1347,6 +1367,7 @@ PREPRINTS_TEMPLATE = """<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Preprint check</title>
 {{ font_link | safe }}
 {{ shared_styles | safe }}
@@ -1407,7 +1428,7 @@ PREPRINTS_TEMPLATE = """<!doctype html>
 <section class="issue-section">
   <h2>Likely published <span class="h-suffix">— {{ published|length }} — review and consider updating <code>superseded_by:</code></span></h2>
   <p class="note">When a preprint also appears in a peer-reviewed venue, OpenAlex usually has both. Confidence reflects how well we matched titles + arXiv ids. Click through to verify before treating any single hit as canonical — OpenAlex's data for CS/ML is patchy.</p>
-  <table>
+  <div class="table-scroll"><table>
     <thead><tr><th style="width:24%">Preprint</th><th>Found at</th><th style="width:7rem">Conf.</th><th style="width:9rem">Checked</th></tr></thead>
     <tbody>
       {% for e in published %}
@@ -1431,7 +1452,7 @@ PREPRINTS_TEMPLATE = """<!doctype html>
       </tr>
       {% endfor %}
     </tbody>
-  </table>
+  </table></div>
 </section>
 {% endif %}
 
@@ -1439,7 +1460,7 @@ PREPRINTS_TEMPLATE = """<!doctype html>
 <section class="issue-section">
   <h2>Unknown <span class="h-suffix">— {{ unknown|length }} — not indexed or no high-confidence match</span></h2>
   <p class="note">OpenAlex returned no match (or none that cleared the title-similarity + author cross-check threshold). Worth a manual look if the source is recent or in a non-mainstream venue.</p>
-  <table>
+  <div class="table-scroll"><table>
     <thead><tr><th>Preprint</th><th>Note</th><th style="width:9rem">Checked</th></tr></thead>
     <tbody>
       {% for e in unknown %}
@@ -1453,7 +1474,7 @@ PREPRINTS_TEMPLATE = """<!doctype html>
       </tr>
       {% endfor %}
     </tbody>
-  </table>
+  </table></div>
 </section>
 {% endif %}
 
@@ -1461,7 +1482,7 @@ PREPRINTS_TEMPLATE = """<!doctype html>
 <section class="issue-section">
   <h2>Errors <span class="h-suffix">— {{ errors|length }}</span></h2>
   <p class="note">Transient network or API failures — they'll retry on the next check.</p>
-  <table>
+  <div class="table-scroll"><table>
     <thead><tr><th>Preprint</th><th>Error</th><th style="width:9rem">Checked</th></tr></thead>
     <tbody>
       {% for e in errors %}
@@ -1472,14 +1493,14 @@ PREPRINTS_TEMPLATE = """<!doctype html>
       </tr>
       {% endfor %}
     </tbody>
-  </table>
+  </table></div>
 </section>
 {% endif %}
 
 <details class="settings" style="margin-top:2rem">
   <summary>Preprint-only ({{ preprint_only|length }})</summary>
   <p class="note">Found in OpenAlex but with no peer-reviewed location — i.e. the preprint hasn't been published yet (or OpenAlex hasn't indexed the published version).</p>
-  <table style="margin-top:1rem">
+  <div class="table-scroll"><table style="margin-top:1rem">
     <thead><tr><th>Preprint</th><th>Venue</th><th style="width:9rem">Checked</th></tr></thead>
     <tbody>
       {% for e in preprint_only %}
@@ -1490,7 +1511,7 @@ PREPRINTS_TEMPLATE = """<!doctype html>
       </tr>
       {% endfor %}
     </tbody>
-  </table>
+  </table></div>
 </details>
 
 {% if unchecked %}
@@ -1615,13 +1636,12 @@ AUDIT_TEMPLATE = """<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Library audit</title>
 {{ font_link | safe }}
 {{ shared_styles | safe }}
 <style>
   .all-clear { background: var(--color-success-100); border: 1px solid #C8E6C9; border-left: 4px solid var(--color-success-600); border-radius: var(--radius-md); padding: var(--space-4) var(--space-5); color: var(--color-success-700); margin: var(--space-4) 0; }
-  .issue-section { margin-top: var(--space-6); }
-  .issue-section .desc { color: var(--color-text-muted); font-size: 0.9rem; margin: var(--space-2) 0 var(--space-3); }
 </style>
 </head>
 <body>
@@ -1675,14 +1695,14 @@ AUDIT_TEMPLATE = """<!doctype html>
 <section class="issue-section">
   <h2>Stale INDEX entries <span class="h-suffix">— {{ findings.index_orphans|length }}</span></h2>
   <p class="desc">These paths are linked from <code>INDEX.md</code> but no <code>.summary.md</code> exists at them on disk. Almost always: a source folder was deleted by hand and INDEX.md hasn't been regenerated since. Click <strong>Regenerate INDEX.md</strong> above to clean them up.</p>
-  <table>
+  <div class="table-scroll"><table>
     <thead><tr><th>Path referenced in INDEX.md</th></tr></thead>
     <tbody>
       {% for p in findings.index_orphans %}
       <tr><td><code>{{ p }}</code></td></tr>
       {% endfor %}
     </tbody>
-  </table>
+  </table></div>
 </section>
 {% endif %}
 
@@ -1690,7 +1710,7 @@ AUDIT_TEMPLATE = """<!doctype html>
 <section class="issue-section">
   <h2>Unindexed summaries <span class="h-suffix">— {{ findings.unindexed|length }}</span></h2>
   <p class="desc">Summary files that exist on disk but aren't linked from <code>INDEX.md</code>. Usually means INDEX.md is stale (regenerate) or the summary's frontmatter doesn't parse (see "Bad frontmatter" below).</p>
-  <table>
+  <div class="table-scroll"><table>
     <thead><tr><th>Path on disk</th><th class="actions">Actions</th></tr></thead>
     <tbody>
       {% for p in findings.unindexed %}
@@ -1700,7 +1720,7 @@ AUDIT_TEMPLATE = """<!doctype html>
       </tr>
       {% endfor %}
     </tbody>
-  </table>
+  </table></div>
 </section>
 {% endif %}
 
@@ -1708,7 +1728,7 @@ AUDIT_TEMPLATE = """<!doctype html>
 <section class="issue-section">
   <h2>Missing originals <span class="h-suffix">— {{ findings.missing_originals|length }}</span></h2>
   <p class="desc">Summaries that have no sibling <code>.pdf</code> or <code>.snapshot.md</code>. The summary alone is fine to keep, but you've lost the source artifact. To restore: drop a PDF in the inbox &mdash; if its filename matches the summary's slug, title, or URL (e.g. an arxiv ID), the worker files it back in place instead of treating it as a new source. Otherwise, delete the summary and re-process from the inbox.</p>
-  <table>
+  <div class="table-scroll"><table>
     <thead><tr><th>Title</th><th>Category</th><th>Path</th><th class="actions">Actions</th></tr></thead>
     <tbody>
       {% for s in findings.missing_originals %}
@@ -1726,7 +1746,7 @@ AUDIT_TEMPLATE = """<!doctype html>
       </tr>
       {% endfor %}
     </tbody>
-  </table>
+  </table></div>
 </section>
 {% endif %}
 
@@ -1734,20 +1754,20 @@ AUDIT_TEMPLATE = """<!doctype html>
 <section class="issue-section">
   <h2>Bad frontmatter <span class="h-suffix">— {{ findings.bad_frontmatter|length }}</span></h2>
   <p class="desc">Summary files whose YAML frontmatter is missing or can't be parsed. <code>regen-index.py</code> silently skips these, which is why they may also appear under "Unindexed".</p>
-  <table>
+  <div class="table-scroll"><table>
     <thead><tr><th>Path</th><th>Category</th></tr></thead>
     <tbody>
       {% for s in findings.bad_frontmatter %}
       <tr><td><code>{{ s.rel_path }}</code></td><td class="mute">{{ s.category }}</td></tr>
       {% endfor %}
     </tbody>
-  </table>
+  </table></div>
 </section>
 {% endif %}
 
 <details class="settings" style="margin-top:2rem">
   <summary>All summaries ({{ findings.summaries|length }})</summary>
-  <table style="margin-top:1rem">
+  <div class="table-scroll"><table style="margin-top:1rem">
     <thead><tr><th>Title</th><th>Category</th><th>Original</th><th class="actions">Actions</th></tr></thead>
     <tbody>
       {% for s in findings.summaries %}
@@ -1764,7 +1784,7 @@ AUDIT_TEMPLATE = """<!doctype html>
       </tr>
       {% endfor %}
     </tbody>
-  </table>
+  </table></div>
 </details>
 {% endif %}
 </body>
