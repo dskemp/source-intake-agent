@@ -38,9 +38,18 @@ VENV_PYTHON = CONFIG / "venv/bin/python"
 PORT = int(os.environ.get("DASHBOARD_PORT", "7341"))
 
 # Origins permitted to make state-changing requests. Browser CSRF defense.
+# DASHBOARD_EXTRA_ORIGINS is an optional comma-separated list of full origins
+# (scheme://host[:port], no trailing slash) — e.g. a reverse-proxy hostname
+# that fronts the dashboard for the local browser.
+_extra_origins = {
+    o.strip().rstrip("/")
+    for o in os.environ.get("DASHBOARD_EXTRA_ORIGINS", "").split(",")
+    if o.strip()
+}
 ALLOWED_ORIGINS = frozenset({
     f"http://127.0.0.1:{PORT}",
     f"http://localhost:{PORT}",
+    *_extra_origins,
 })
 
 # UUID prefix the worker assigns to staged input files. Must stay in sync
