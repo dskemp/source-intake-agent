@@ -5,6 +5,7 @@ Binds to 127.0.0.1 only. Cross-origin POSTs are blocked at the
 request layer as defense-in-depth against browser CSRF (see
 `block_cross_origin_post` below).
 """
+import calendar
 import json
 import os
 import re
@@ -1640,9 +1641,18 @@ def preprint_view_data():
     def fmt_ago(ts_str: str) -> str:
         if not ts_str:
             return "—"
+        # Parse the fixed "YYYY-MM-DDTHH:MM:SSZ" UTC stamp by hand. We avoid
+        # time.strptime/datetime.strptime because they lazily import the
+        # private _strptime module on first call, which fails in a
+        # long-running process whose interpreter files were swapped out
+        # underneath it (e.g. a Homebrew Python point upgrade). calendar.timegm
+        # also correctly treats the stamp as UTC, matching `now = time.time()`.
         try:
-            t = time.mktime(time.strptime(ts_str, "%Y-%m-%dT%H:%M:%SZ"))
-        except ValueError:
+            date_part, time_part = ts_str.rstrip("Z").split("T")
+            y, mo, d = (int(x) for x in date_part.split("-"))
+            h, mi, s = (int(x) for x in time_part.split(":"))
+            t = calendar.timegm((y, mo, d, h, mi, s, 0, 0, 0))
+        except (ValueError, AttributeError):
             return ts_str
         delta = now - t
         if delta < 60:
