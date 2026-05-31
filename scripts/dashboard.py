@@ -7,6 +7,7 @@ request layer as defense-in-depth against browser CSRF (see
 """
 import calendar
 import json
+import logging
 import os
 import re
 import shutil
@@ -1958,5 +1959,20 @@ def delete_source():
     return redirect("/library?flash=" + flash.replace("&", "and").replace("#", "").replace(" ", "+"))
 
 
+class _QuietStatusPolls(logging.Filter):
+    """Drop the access-log line for successful /api/status polls.
+
+    The frontend re-polls /api/status every ~3s, so an always-open dashboard
+    fills the werkzeug access log (which launchd routes to the .err.log) with
+    tens of thousands of "GET /api/status ... 200" lines. Suppress only those;
+    every other request and any non-200 status still gets logged.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+        return not ("GET /api/status " in msg and '" 200 ' in msg)
+
+
 if __name__ == "__main__":
+    logging.getLogger("werkzeug").addFilter(_QuietStatusPolls())
     app.run(host="127.0.0.1", port=PORT, debug=False)
