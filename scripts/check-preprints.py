@@ -119,10 +119,12 @@ def author_surnames(authors) -> list[str]:
         authors = [authors]
     out = []
     for a in authors or []:
+        a = a.strip() if isinstance(a, str) else ""
         if not a:
             continue
         # YAML schema convention is "Last, First" — also handle "First Last".
-        surname = a.split(",")[0].strip() if "," in a else a.split()[-1].strip()
+        # `a` is non-empty and stripped, so a.split() can't be empty here.
+        surname = a.split(",")[0].strip() if "," in a else a.split()[-1]
         if surname:
             out.append(surname.lower())
     return out
@@ -283,7 +285,9 @@ def check_by_title(
         return {"status": "error", "error": f"openalex search failed: {e}"}
     if not result or not result.get("results"):
         return {"status": "unknown", "note": "no OpenAlex match"}
-    surnames = set(author_surnames(list(authors)))
+    # author_surnames accepts a scalar string or a list. Don't list()-wrap it —
+    # that explodes a scalar "First Last, ..." string into characters.
+    surnames = set(author_surnames(authors))
     expected_arxiv_id = (expected_arxiv_id or "").lower()
     best = None
     best_score = 0.0
