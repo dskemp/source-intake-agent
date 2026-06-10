@@ -8,7 +8,8 @@ Walks the library, finds each `*.summary.md`, locates its sibling source file
 Idempotent: summaries that already have a source_hash are skipped. Run once
 after upgrading to the dedup-aware worker.
 
-    ~/.config/claude-source-intake/venv/bin/python scripts/backfill-hashes.py
+    LIBRARY_PATH=~/source-library \
+      ~/.config/claude-source-intake/venv/bin/python scripts/backfill-hashes.py
 """
 import hashlib
 import os
@@ -18,7 +19,10 @@ from pathlib import Path
 
 import yaml
 
-LIBRARY = Path(os.environ.get("LIBRARY_PATH") or (Path.home() / "source-library"))
+_library_path = os.environ.get("LIBRARY_PATH")
+if not _library_path:
+    raise SystemExit("ERROR: LIBRARY_PATH must be set (see the installed launchd plist).")
+LIBRARY = Path(_library_path)
 
 
 def parse_frontmatter(text: str):

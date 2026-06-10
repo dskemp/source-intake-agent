@@ -30,7 +30,10 @@ import sys
 from difflib import SequenceMatcher
 from pathlib import Path
 
-LIBRARY = Path(os.environ.get("LIBRARY_PATH") or (Path.home() / "source-library"))
+_library_path = os.environ.get("LIBRARY_PATH")
+if not _library_path:
+    raise SystemExit("ERROR: LIBRARY_PATH must be set (see the installed launchd plist).")
+LIBRARY = Path(_library_path)
 CONFIG = Path(os.environ.get("PREPRINT_CONFIG") or (Path.home() / ".config/claude-source-intake"))
 CACHE_FILE = CONFIG / "preprint-checks.json"
 
