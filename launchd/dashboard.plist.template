@@ -21,18 +21,34 @@
     <string>/tmp/claude-source-intake-ui.err.log</string>
     <key>EnvironmentVariables</key>
     <dict>
+        <!-- PATH and CLAUDE_BIN mirror the worker plist: the dashboard's
+             "Run now" button spawns worker.sh, which must be able to find
+             the claude binary under launchd's minimal default PATH. -->
+        <key>PATH</key>
+        <string>__HOME__/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
         <key>HOME</key>
         <string>__HOME__</string>
         <key>LIBRARY_PATH</key>
         <string>__LIBRARY__</string>
         <key>INBOX_PATH</key>
         <string>__INBOX__</string>
+        <key>CLAUDE_BIN</key>
+        <string>__CLAUDE__</string>
         <key>CATEGORY_ORDER</key>
         <string>__CATEGORY_ORDER__</string>
         <key>DOMAIN</key>
         <string>__DOMAIN__</string>
         <key>DASHBOARD_EXTRA_ORIGINS</key>
         <string>__DASHBOARD_EXTRA_ORIGINS__</string>
+        <key>DASHBOARD_PORT</key>
+        <string>__DASHBOARD_PORT__</string>
+        <!-- Needed here too: the "Check now" button runs check-preprints.py
+             with the dashboard's environment; without these it ignores the
+             user's OpenAlex polite-pool opt-in and refresh cadence. -->
+        <key>OPENALEX_EMAIL</key>
+        <string>__OPENALEX_EMAIL__</string>
+        <key>PREPRINT_REFRESH_DAYS</key>
+        <string>__PREPRINT_REFRESH_DAYS__</string>
     </dict>
 </dict>
 </plist>

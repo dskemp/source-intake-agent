@@ -35,6 +35,8 @@
         <string>__LIBRARY__</string>
         <key>OPENALEX_EMAIL</key>
         <string>__OPENALEX_EMAIL__</string>
+        <key>PREPRINT_REFRESH_DAYS</key>
+        <string>__PREPRINT_REFRESH_DAYS__</string>
     </dict>
 </dict>
 </plist>
