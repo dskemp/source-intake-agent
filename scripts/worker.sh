@@ -66,10 +66,52 @@ check_dedup() {
 import hashlib, re, sys
 from difflib import SequenceMatcher
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 import yaml
 
 library, input_path = sys.argv[1:3]
 input_path = Path(input_path)
+
+
+def canon_url(u):
+    """Conservative URL normalization so trivially-different forms of the
+    same address still dedup: lowercase scheme/host, drop the fragment and
+    common tracking params, strip a trailing slash. Anything non-http(s)
+    is compared as-is."""
+    u = (u or "").strip()
+    if not u:
+        return ""
+    try:
+        parts = urlsplit(u)
+    except ValueError:
+        return u
+    scheme = parts.scheme.lower()
+    if scheme not in ("http", "https"):
+        return u
+    query = "&".join(
+        q for q in parts.query.split("&")
+        if q and not q.lower().startswith(("utm_", "fbclid=", "gclid=", "mc_cid=", "mc_eid="))
+    )
+    return urlunsplit((scheme, parts.netloc.lower(), parts.path.rstrip("/"), query, ""))
+
+
+def read_frontmatter_text(p):
+    """Read enough of a summary to cover its frontmatter without slurping
+    the whole body; the dedup pass only needs the YAML block. Falls back
+    to a full read in the (unlikely) case frontmatter exceeds the window."""
+    try:
+        with open(p, errors="replace") as f:
+            head = f.read(65536)
+    except Exception:
+        return None
+    if not head.startswith("---\n"):
+        return None
+    if head.find("\n---\n", 4) == -1 and len(head) == 65536:
+        try:
+            head = p.read_text(errors="replace")
+        except Exception:
+            return None
+    return head
 
 hasher = hashlib.sha256()
 with open(input_path, 'rb') as f:
@@ -86,6 +128,7 @@ if input_path.suffix.lower() in ('.txt', '.url'):
             input_url = m.group(0).rstrip('.,;)>"\'')
     except Exception:
         pass
+input_url_canon = canon_url(input_url)
 
 is_pdf = input_path.suffix.lower() == '.pdf'
 
@@ -103,11 +146,8 @@ input_name_norm = normalize(input_path.stem)
 fuzzy_candidates = []  # (summary_path, slug_norm, title_norm)
 
 for summary in Path(library).glob('*/*/*.summary.md'):
-    try:
-        text = summary.read_text()
-    except Exception:
-        continue
-    if not text.startswith('---\n'):
+    text = read_frontmatter_text(summary)
+    if text is None:
         continue
     end = text.find('\n---\n', 4)
     if end == -1:
@@ -120,7 +160,7 @@ for summary in Path(library).glob('*/*/*.summary.md'):
         reason = 'backfill:hash' if (is_pdf and not has_original(summary)) else 'hash'
         print(f"{summary}\t{reason}")
         sys.exit(0)
-    if input_url and fm.get('url') == input_url:
+    if input_url_canon and canon_url(fm.get('url') or '') == input_url_canon:
         reason = 'backfill:url' if (is_pdf and not has_original(summary)) else 'url'
         print(f"{summary}\t{reason}")
         sys.exit(0)
@@ -186,13 +226,15 @@ from pathlib import Path
 path = Path(sys.argv[1])
 hash_val = sys.argv[2]
 text = path.read_text()
-if 'source_hash:' in text:
-    sys.exit(0)
 if not text.startswith('---\n'):
     sys.exit(1)
 end = text.find('\n---\n', 4)
 if end == -1:
     sys.exit(1)
+# Scope the already-present check to the frontmatter block — a summary whose
+# BODY merely mentions the literal string must still get its hash injected.
+if 'source_hash:' in text[:end + 1]:
+    sys.exit(0)
 new_line = f'source_hash: "{hash_val}"\n'
 m = re.search(r'^tldr:[^\n]*\n', text[:end + 1], re.MULTILINE)
 insert_at = m.end() if m else end + 1
@@ -230,9 +272,15 @@ if log_file:
                     e = json.loads(line)
                 except json.JSONDecodeError:
                     continue
+                # A retried run appends one result event per attempt; sum
+                # them so cost/duration reflect what was actually spent.
                 if e.get("type") == "result":
-                    cost_usd = e.get("total_cost_usd") or e.get("cost_usd")
-                    duration_ms = e.get("duration_ms")
+                    c = e.get("total_cost_usd") or e.get("cost_usd")
+                    if c is not None:
+                        cost_usd = (cost_usd or 0) + c
+                    d = e.get("duration_ms")
+                    if d is not None:
+                        duration_ms = (duration_ms or 0) + d
     except FileNotFoundError:
         pass
 entry = {
@@ -244,18 +292,6 @@ with open(runs_log, "a") as f:
     f.write(json.dumps(entry) + "\n")
 PY
 }
-
-# Rotate runs.jsonl if it has grown past the configured ceiling. Keeps one
-# generation of history (.1) so post-mortem grep still works on recent past.
-if [[ -f "$RUNS_LOG" ]]; then
-  size=$(stat -f %z "$RUNS_LOG" 2>/dev/null || echo 0)
-  if (( size > RUNS_LOG_MAX_BYTES )); then
-    log "rotating runs.jsonl (${size} bytes > ${RUNS_LOG_MAX_BYTES})"
-    rm -f "${RUNS_LOG}.1" 2>/dev/null || true
-    mv "$RUNS_LOG" "${RUNS_LOG}.1" 2>/dev/null || true
-    : > "$RUNS_LOG"
-  fi
-fi
 
 # Acquire the worker lock. Writes our PID into the lockdir so a stale lock
 # left by a killed worker can be detected and reclaimed.
@@ -293,19 +329,67 @@ if ! acquire_lock; then
 fi
 trap 'rm -rf "$LOCKDIR" 2>/dev/null || true' EXIT
 
-# Sweep stale files left in .staged/ from a previous run. With the lock
-# held we know no other worker is touching .staged/, so anything here is
-# an orphan (e.g. a helper script Claude wrote and didn't clean up).
-stale_in_staged=$(find "$INBOX/.staged" -mindepth 1 -type f 2>/dev/null | wc -l | tr -d ' ')
-if (( stale_in_staged > 0 )); then
-  log "found $stale_in_staged stale file(s) in .staged/; cleaning up"
-  find "$INBOX/.staged" -mindepth 1 -type f -delete 2>/dev/null || true
+# Rotate runs.jsonl if it has grown past the configured ceiling. Keeps one
+# generation of history (.1) so post-mortem grep still works on recent past.
+# Done under the lock so two near-simultaneous invocations can't race the mv.
+if [[ -f "$RUNS_LOG" ]]; then
+  size=$(stat -f %z "$RUNS_LOG" 2>/dev/null || echo 0)
+  if (( size > RUNS_LOG_MAX_BYTES )); then
+    log "rotating runs.jsonl (${size} bytes > ${RUNS_LOG_MAX_BYTES})"
+    rm -f "${RUNS_LOG}.1" 2>/dev/null || true
+    mv "$RUNS_LOG" "${RUNS_LOG}.1" 2>/dev/null || true
+    : > "$RUNS_LOG"
+  fi
 fi
+
+# Same treatment for promotion.log (detect-promotion's stderr), which is
+# append-only and would otherwise grow without bound.
+PROMOTION_LOG="$CONFIG/promotion.log"
+if [[ -f "$PROMOTION_LOG" ]]; then
+  psize=$(stat -f %z "$PROMOTION_LOG" 2>/dev/null || echo 0)
+  if (( psize > 1048576 )); then
+    log "rotating promotion.log (${psize} bytes)"
+    mv -f "$PROMOTION_LOG" "${PROMOTION_LOG}.1" 2>/dev/null || true
+  fi
+fi
+
+shopt -s nullglob
+
+# Sweep .staged/ leftovers from a previous run. With the lock held we know no
+# other worker is touching .staged/. A UUID-prefixed file is the staged input
+# of a run that died mid-flight (reboot, kill -9 — the EXIT trap never fired);
+# between staging and cleanup it is the ONLY copy of the user's file, so move
+# it back to the inbox for reprocessing rather than deleting it. Anything
+# without the UUID prefix is an orphaned artifact and is safe to remove.
+UUID_PREFIX_RE='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-'
+for stale in "$INBOX/.staged"/*; do
+  [[ -f "$stale" ]] || continue
+  sb=$(basename "$stale")
+  if [[ "$sb" =~ $UUID_PREFIX_RE ]]; then
+    orig="${sb:37}"   # strip "<uuid>-" (36 uuid chars + 1 hyphen)
+    dest="$INBOX/$orig"
+    n=1
+    while [[ -e "$dest" ]]; do
+      if [[ "$orig" == *.* ]]; then
+        dest="$INBOX/${orig%.*}.${n}.${orig##*.}"
+      else
+        dest="$INBOX/${orig}.${n}"
+      fi
+      n=$((n+1))
+    done
+    if mv "$stale" "$dest" 2>/dev/null; then
+      log "recovered staged input from interrupted run: $sb -> $(basename "$dest")"
+    else
+      log "WARNING: could not recover staged input $sb"
+    fi
+  else
+    log "deleting stray artifact in .staged/: $sb"
+    rm -f "$stale" 2>/dev/null || true
+  fi
+done
 
 NOW=$(date +%s)
 processed_any=0
-
-shopt -s nullglob
 for path in "$INBOX"/*; do
   [[ -f "$path" ]] || continue
   base=$(basename "$path")
@@ -558,6 +642,9 @@ print(template.replace("<STAGED_PATH>", sys.argv[2]).replace("<DOMAIN>", domain)
   # subshell SIGTERMs claude after CLAUDE_TIMEOUT seconds, then SIGKILLs
   # if it doesn't respond. Exit codes mapped to: 124 = our timeout,
   # 127 = binary missing (no point retrying), anything else = retryable.
+  # WebFetch is allowlisted explicitly: acceptEdits only auto-approves file
+  # edits, and in headless -p mode an unanswerable permission prompt is a
+  # denial — without this, .txt/.url (web source) intake silently fails.
   # Deny rules block writes into .staged/ — Claude needs Read access
   # (granted via --add-dir) but the staging dir is a managed queue.
   # The // prefix marks absolute paths in Claude Code's permission DSL;
@@ -577,6 +664,7 @@ print(template.replace("<STAGED_PATH>", sys.argv[2]).replace("<DOMAIN>", domain)
         --permission-mode acceptEdits \
         --add-dir "$LIBRARY" \
         --add-dir "$INBOX/.staged" \
+        --allowed-tools "WebFetch" \
         --disallowed-tools \
           "Write(/${INBOX}/.staged/**)" \
           "Edit(/${INBOX}/.staged/**)" \
@@ -636,13 +724,26 @@ print(template.replace("<STAGED_PATH>", sys.argv[2]).replace("<DOMAIN>", domain)
 
   if (( claude_exit == 0 )) && (( num_produced > 0 )); then
     log "  success (claude exit 0, $num_produced summary file(s) produced)"
+    # Promotion: the preprint's slug dir was emptied of files at detect-time.
+    # Remove it now, BEFORE relocating the produced folder — a published
+    # version that re-uses the preprint's slug would otherwise collide with
+    # the leftover empty dir and the relocation would be skipped.
+    if (( is_promotion )) && [[ -d "$promote_target_dir" ]]; then
+      rmdir "$promote_target_dir" 2>/dev/null || true
+    fi
     # Inject source_hash into each produced summary so future drops dedup.
-    # Also ensure the original input is filed alongside the summary as
-    # <slug>.pdf — the prompt asks the agent to copy it, but agents
-    # occasionally skip that step. Belt-and-suspenders here.
+    # Also ensure the original input is filed alongside the summary — as
+    # <slug>.pdf for PDF inputs, <slug>.snapshot.md for .md/.html inputs.
+    # The prompt asks the agent to file it, but agents occasionally skip
+    # that step, and the staged copy is deleted below; without this
+    # backstop the original would be lost. Belt-and-suspenders here.
     input_hash=$(file_sha256 "$staged_path")
     is_pdf=0
-    [[ "$base" == *.[Pp][Dd][Ff] ]] && is_pdf=1
+    is_doc=0
+    case "$base" in
+      *.[Pp][Dd][Ff]) is_pdf=1 ;;
+      *.[Mm][Dd]|*.[Hh][Tt][Mm][Ll]|*.[Hh][Tt][Mm]) is_doc=1 ;;
+    esac
     while IFS= read -r produced_path; do
       [[ -n "$produced_path" ]] || continue
       if inject_hash "$produced_path" "$input_hash"; then
@@ -657,6 +758,18 @@ print(template.replace("<STAGED_PATH>", sys.argv[2]).replace("<DOMAIN>", domain)
             log "  filed PDF -> $pdf_target"
           else
             log "  WARNING: failed to copy PDF to $pdf_target"
+          fi
+        fi
+      fi
+      if (( is_doc )); then
+        folder=$(dirname "$produced_path")
+        slug=$(basename "$produced_path" .summary.md)
+        snap_target="$folder/$slug.snapshot.md"
+        if [[ ! -f "$snap_target" ]]; then
+          if cp "$staged_path" "$snap_target"; then
+            log "  filed snapshot -> $snap_target"
+          else
+            log "  WARNING: failed to copy snapshot to $snap_target"
           fi
         fi
       fi
@@ -712,10 +825,43 @@ print(template.replace("<STAGED_PATH>", sys.argv[2]).replace("<DOMAIN>", domain)
     fi
   else
     log "  failure (claude exit $claude_exit, $num_produced summary file(s) produced)"
+    # Quarantine partial output: claude may have written summaries before the
+    # run failed (e.g. watchdog timeout). Left in the library they'd be
+    # unindexed, carry no source_hash, and their url: could dedup-block a
+    # later retry of the same input. Only quarantine folders CREATED by this
+    # run (birthtime >= the run sentinel) — a pre-existing folder that merely
+    # changed is the user's data and stays put.
+    if (( num_produced > 0 )); then
+      sentinel_ts=$(stat -f %m "$sentinel" 2>/dev/null || echo 0)
+      partial_root="$INBOX/_failed/_partial"
+      while IFS= read -r produced_path; do
+        [[ -n "$produced_path" ]] || continue
+        pfolder=$(dirname "$produced_path")
+        [[ -d "$pfolder" ]] || continue
+        birth=$(stat -f %B "$pfolder" 2>/dev/null || echo 0)
+        if (( birth >= sentinel_ts )); then
+          mkdir -p "$partial_root"
+          pdest="$partial_root/$(basename "$pfolder")"
+          n=1
+          while [[ -e "$pdest" ]]; do
+            pdest="$partial_root/$(basename "$pfolder").$n"
+            n=$((n+1))
+          done
+          if mv "$pfolder" "$pdest" 2>/dev/null; then
+            log "  quarantined partial output: $pfolder -> $pdest"
+            new_produced_path="$pdest/$(basename "$produced_path")"
+            sed -i.bak "s|^${produced_path}$|${new_produced_path}|" "$produced_list" 2>/dev/null && rm -f "${produced_list}.bak"
+          fi
+        else
+          log "  NOTE: $produced_path changed during the failed run but its folder predates it; leaving in place"
+        fi
+      done < "$produced_list"
+    fi
     # Promotion safety net: if we archived a preprint summary in this tick but
     # the intake then failed, restore the preprint so the library isn't left
     # with a hole. The promoted PDF still goes to _failed/ for retry.
     if (( is_promotion )) && [[ -d "$archive_dir" ]] && [[ -n "$promote_target_dir" ]]; then
+      mkdir -p "$promote_target_dir"
       restored=0
       for f in "$archive_dir"/*; do
         bn=$(basename "$f")
