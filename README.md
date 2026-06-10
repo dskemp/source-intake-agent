@@ -129,6 +129,10 @@ $INBOX/                                ← drop files here
    frontmatter, delete the staged file, regenerate `INDEX.md`, append a JSONL
    entry with cost + duration to `runs.jsonl`.
 6. On failure: move the staged file to `_failed/` with its log next to it.
+   Any summary folders the failed run already created are quarantined to
+   `_failed/_partial/` so a half-written summary can't dedup-block a retry.
+7. If the worker is killed mid-run (reboot, force-quit), the next tick
+   recovers the staged input back to the inbox automatically.
 
 ## Prerequisites
 
@@ -234,8 +238,8 @@ you have a reason.
 | `RETRY_BACKOFF` | `30` | Seconds between retries. |
 | `RUNS_LOG_MAX_BYTES` | `5242880` | Rotate `runs.jsonl` past 5 MB; previous file becomes `runs.jsonl.1`. |
 | `RUN_LOG_KEEP` | `50` | Per-iteration stream-json archives kept under `$CONFIG/run-logs/`. |
-| `DASHBOARD_PORT` | `7341` | Localhost port the dashboard binds to. |
-| `PREPRINT_REFRESH_DAYS` | `7` | Preprint cache entries older than this are re-checked. Read by `check-preprints.py` and shown on `/preprints`. |
+| `DASHBOARD_PORT` | `7341` | Localhost port the dashboard binds to. Set it in `.env` and re-run `./install.sh` (it's rendered into the dashboard plist). |
+| `PREPRINT_REFRESH_DAYS` | `7` | Preprint cache entries older than this are re-checked. Set it in `.env` and re-run `./install.sh` (rendered into the dashboard + cron plists). |
 | `PREPRINT_PROMOTION_MODE` | `auto` | How the worker handles a PDF that looks like the published version of a tracked preprint. `auto` archives the preprint and intakes the published PDF into its category slot. `stage` routes the PDF to `_promoted/_pending/` for manual review. `off` disables detection. |
 
 ## Keeping the repo and the running system in sync
@@ -338,7 +342,9 @@ The worker skips files that duplicate something already in the library, so
 accidental re-drops don't cost time or money:
 
 - **Byte-identical PDFs/MDs/HTMLs** are matched by `source_hash:` (SHA-256)
-- **`.txt`/`.url` inputs** are matched by `url:` against existing summaries
+- **`.txt`/`.url` inputs** are matched by `url:` against existing summaries,
+  after conservative normalization on both sides (case-insensitive host,
+  trailing slash, `utm_*`-style tracking params, fragments)
 
 A duplicate lands in `_duplicate/` with a `.log` sidecar identifying the
 matched summary; you'll also see it in the dashboard's Duplicates section.

@@ -266,7 +266,6 @@ def _hit_arxiv_id(hit: dict) -> str | None:
 def check_by_title(
     title: str,
     authors: Iterable[str],
-    preprint_venue: str,
     expected_arxiv_id: str = "",
 ) -> dict:
     """Search OpenAlex by title; require an author surname match to accept.
@@ -402,9 +401,7 @@ def check_one(p: dict) -> dict:
     arxiv_id = ""
     if p["preprint_venue"] == "arXiv" and p["preprint_id"]:
         arxiv_id = re.sub(r"v\d+$", "", p["preprint_id"])
-    return check_by_title(
-        p["title"], p["authors"], p["preprint_venue"], expected_arxiv_id=arxiv_id,
-    )
+    return check_by_title(p["title"], p["authors"], expected_arxiv_id=arxiv_id)
 
 
 def run(force: bool = False, only_rel: str | None = None) -> dict:
@@ -427,7 +424,7 @@ def run(force: bool = False, only_rel: str | None = None) -> dict:
         prior = cache.get(rel) or {}
         if not force and not only_rel and is_fresh(prior, REFRESH_DAYS):
             skipped += 1
-            # Carry forward authors/title in case they changed in the summary.
+            # Refresh the display fields in case they changed in the summary.
             prior.update({
                 "title": p["title"],
                 "preprint_venue": p["preprint_venue"],
