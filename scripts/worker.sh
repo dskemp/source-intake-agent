@@ -55,11 +55,13 @@ log() { echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*"; }
 
 # Dedup check. Echoes "<matched-summary-path>\t<reason>" where reason is one of:
 #   hash | url              — duplicate of an existing source (move to _duplicate/)
-#   backfill:hash           — same bytes as an existing summary whose .pdf is missing
-#   backfill:url            — same URL as an existing summary whose .pdf is missing
-#   backfill:fuzzy          — input PDF filename strongly matches a missing-original
-#                             summary's slug/title (last-ditch repair signal)
-# Empty output = not a duplicate; proceed with normal intake.
+#   backfill:hash           — same bytes as an existing summary whose original is missing
+#   backfill:url            — same URL as an existing summary whose original is missing
+#   backfill:fuzzy          — input filename or PDF title/first-page content strongly
+#                             matches a missing-original summary's slug/title
+# Backfill applies to PDF and .md/.html inputs; the file is filed as the
+# matched summary's missing <slug>.pdf / <slug>.snapshot.md instead of running
+# a full intake. Empty output = not a duplicate; proceed with normal intake.
 check_dedup() {
   local input_path="$1"
   "$PYTHON" - "$LIBRARY" "$input_path" <<'PY'
@@ -131,6 +133,8 @@ if input_path.suffix.lower() in ('.txt', '.url'):
 input_url_canon = canon_url(input_url)
 
 is_pdf = input_path.suffix.lower() == '.pdf'
+is_doc = input_path.suffix.lower() in ('.md', '.html', '.htm')
+can_backfill = is_pdf or is_doc
 
 def has_original(summary_path):
     slug = summary_path.name[: -len('.summary.md')]
@@ -143,7 +147,24 @@ def normalize(s):
     return " ".join(s.split())
 
 input_name_norm = normalize(input_path.stem)
-fuzzy_candidates = []  # (summary_path, slug_norm, title_norm)
+
+# Content-based identity signals for PDFs whose filenames are opaque
+# (publisher names like 3582269.3615599.pdf say nothing about the paper).
+# The embedded Title metadata and the first page's text usually carry the
+# real title, which can be matched against the summary's title: field.
+pdf_meta_norm = ""
+pdf_page1_norm = ""
+if is_pdf:
+    try:
+        from pypdf import PdfReader
+        reader = PdfReader(str(input_path))
+        pdf_meta_norm = normalize((reader.metadata or {}).get('/Title') or '')
+        if reader.pages:
+            pdf_page1_norm = normalize((reader.pages[0].extract_text() or '')[:2000])
+    except Exception:
+        pass
+
+fuzzy_candidates = []  # (summary_path, slug_norm, title_norm, url_ids)
 
 for summary in Path(library).glob('*/*/*.summary.md'):
     text = read_frontmatter_text(summary)
@@ -157,14 +178,14 @@ for summary in Path(library).glob('*/*/*.summary.md'):
     except yaml.YAMLError:
         continue
     if input_hash and fm.get('source_hash') == input_hash:
-        reason = 'backfill:hash' if (is_pdf and not has_original(summary)) else 'hash'
+        reason = 'backfill:hash' if (can_backfill and not has_original(summary)) else 'hash'
         print(f"{summary}\t{reason}")
         sys.exit(0)
     if input_url_canon and canon_url(fm.get('url') or '') == input_url_canon:
-        reason = 'backfill:url' if (is_pdf and not has_original(summary)) else 'url'
+        reason = 'backfill:url' if (can_backfill and not has_original(summary)) else 'url'
         print(f"{summary}\t{reason}")
         sys.exit(0)
-    if is_pdf and not has_original(summary):
+    if can_backfill and not has_original(summary):
         slug = summary.name[: -len('.summary.md')]
         # Arxiv IDs (NNNN.NNNNN) in the summary's URL are nearly unique, so
         # we surface them as a strong-signal match against the raw filename.
@@ -176,12 +197,13 @@ for summary in Path(library).glob('*/*/*.summary.md'):
             url_ids,
         ))
 
-# Fuzzy backfill: only PDF inputs, only against summaries known to be missing
-# their original. Score is the max of slug- and title-similarity, lifted to 0.85
-# on substring containment and boosted +0.10 when a year in the slug also
-# appears in the input filename. Require top >= 0.70 AND a >= 0.15 margin over
-# the runner-up so an ambiguous pile of candidates declines to guess.
-if is_pdf and fuzzy_candidates:
+# Fuzzy backfill: only PDF/doc inputs, only against summaries known to be
+# missing their original. Score is the max of filename-vs-slug/title and (for
+# PDFs) embedded-title-vs-title similarity, lifted on substring containment
+# and boosted +0.10 when a year in the slug also appears in the input
+# filename. Require top >= 0.70 AND a >= 0.15 margin over the runner-up so an
+# ambiguous pile of candidates declines to guess.
+if can_backfill and fuzzy_candidates:
     input_name_raw = input_path.stem  # for arxiv-id substring check (case-sensitive ids)
     def score(slug_norm, title_norm, url_ids):
         # Arxiv ID hit on the raw filename is decisive — IDs are unique, so a
@@ -196,6 +218,15 @@ if is_pdf and fuzzy_candidates:
             sc = max(sc, 0.85)
         if title_norm and (title_norm in input_name_norm or input_name_norm in title_norm):
             sc = max(sc, 0.85)
+        # Content signals: the PDF's own Title metadata or first-page text
+        # matching the summary's title identifies the source even when the
+        # filename is an opaque publisher artifact.
+        if pdf_meta_norm and title_norm:
+            sc = max(sc, SequenceMatcher(None, pdf_meta_norm, title_norm).ratio())
+            if title_norm in pdf_meta_norm or pdf_meta_norm in title_norm:
+                sc = max(sc, 0.90)
+        if pdf_page1_norm and title_norm and title_norm in pdf_page1_norm:
+            sc = max(sc, 0.90)
         ym = re.search(r'\b(19|20)\d{2}\b', slug_norm)
         if ym and ym.group(0) in input_name_norm:
             sc += 0.10
@@ -218,24 +249,34 @@ file_sha256() {
 }
 
 # Insert source_hash: into a summary's frontmatter, idempotently.
+# With a third arg "force", an existing (possibly stale) source_hash line is
+# replaced instead of being left alone — used when a backfill just filed the
+# authoritative artifact and whatever the frontmatter said is superseded.
 inject_hash() {
-  local summary_path="$1" hash_val="$2"
-  "$PYTHON" - "$summary_path" "$hash_val" <<'PY'
+  local summary_path="$1" hash_val="$2" force="${3:-}"
+  "$PYTHON" - "$summary_path" "$hash_val" "$force" <<'PY'
 import re, sys
 from pathlib import Path
 path = Path(sys.argv[1])
 hash_val = sys.argv[2]
+force = sys.argv[3] == 'force'
 text = path.read_text()
 if not text.startswith('---\n'):
     sys.exit(1)
 end = text.find('\n---\n', 4)
 if end == -1:
     sys.exit(1)
+new_line = f'source_hash: "{hash_val}"\n'
 # Scope the already-present check to the frontmatter block — a summary whose
 # BODY merely mentions the literal string must still get its hash injected.
 if 'source_hash:' in text[:end + 1]:
+    if not force:
+        sys.exit(0)
+    fm = re.sub(r'^source_hash:[^\n]*\n', new_line, text[:end + 1], count=1, flags=re.MULTILINE)
+    if fm == text[:end + 1]:
+        sys.exit(0)
+    path.write_text(fm + text[end + 1:])
     sys.exit(0)
-new_line = f'source_hash: "{hash_val}"\n'
 m = re.search(r'^tldr:[^\n]*\n', text[:end + 1], re.MULTILINE)
 insert_at = m.end() if m else end + 1
 path.write_text(text[:insert_at] + new_line + text[insert_at:])
@@ -455,17 +496,21 @@ for path in "$INBOX"/*; do
     matched_path="${dedup_result%%$'\t'*}"
     matched_reason="${dedup_result##*$'\t'}"
 
-    # Backfill: matched summary is missing its source artifact and the input is
-    # a PDF that hash/URL/title-matches it. File the PDF in place of running
-    # the full intake — the summary is already correct.
+    # Backfill: matched summary is missing its source artifact and the input
+    # hash/URL/title-matches it. File the input in place of running the full
+    # intake — the summary is already correct.
     if [[ "$matched_reason" == backfill:* ]]; then
       backfill_kind="${matched_reason#backfill:}"
       summary_dir=$(dirname "$matched_path")
       summary_base=$(basename "$matched_path")
       summary_slug="${summary_base%.summary.md}"
-      pdf_target="$summary_dir/$summary_slug.pdf"
+      case "$base" in
+        *.[Pp][Dd][Ff]) bf_ext="pdf" ;;
+        *)              bf_ext="snapshot.md" ;;
+      esac
+      pdf_target="$summary_dir/$summary_slug.$bf_ext"
       if [[ -e "$pdf_target" ]]; then
-        # Race: PDF appeared since check_dedup looked. Leave the input in
+        # Race: artifact appeared since check_dedup looked. Leave the input in
         # the inbox; next tick re-evaluates against the updated library state.
         log "backfill skipped: $pdf_target already exists; leaving '$base' in inbox for next tick"
         continue
@@ -474,14 +519,13 @@ for path in "$INBOX"/*; do
         log "backfill failed: could not move '$base' to $pdf_target; leaving in inbox"
         continue
       fi
-      log "backfilled missing PDF for '$base' (matched by $backfill_kind) -> $pdf_target"
-      # Fuzzy matches don't carry a verified hash on the summary, so inject
-      # the filed PDF's hash to anchor future dedup. Hash/URL backfills
-      # already have the right value in frontmatter (it's how they matched).
-      if [[ "$backfill_kind" == fuzzy ]]; then
-        pdf_hash=$(file_sha256 "$pdf_target")
-        inject_hash "$matched_path" "$pdf_hash" || true
-      fi
+      log "backfilled missing original for '$base' (matched by $backfill_kind) -> $pdf_target"
+      # Re-anchor dedup on the artifact we just filed. Force-replace: a
+      # fuzzy/title match means whatever source_hash the frontmatter carried
+      # (often a stale value from an old multi-summary run) did NOT match the
+      # real source, so it must be overwritten, not skipped.
+      pdf_hash=$(file_sha256 "$pdf_target")
+      inject_hash "$matched_path" "$pdf_hash" force || true
       bf_paths_file=$(mktemp -t intake-bf-paths)
       printf '%s\n' "$matched_path" > "$bf_paths_file"
       append_run "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$base" "backfill" "$bf_paths_file" "" ""
@@ -731,12 +775,14 @@ print(template.replace("<STAGED_PATH>", sys.argv[2]).replace("<DOMAIN>", domain)
     if (( is_promotion )) && [[ -d "$promote_target_dir" ]]; then
       rmdir "$promote_target_dir" 2>/dev/null || true
     fi
-    # Inject source_hash into each produced summary so future drops dedup.
-    # Also ensure the original input is filed alongside the summary — as
+    # Ensure the original input is filed alongside the summary — as
     # <slug>.pdf for PDF inputs, <slug>.snapshot.md for .md/.html inputs.
     # The prompt asks the agent to file it, but agents occasionally skip
     # that step, and the staged copy is deleted below; without this
     # backstop the original would be lost. Belt-and-suspenders here.
+    # Only when the run produced exactly one summary, though: a digest input
+    # that yields several summaries is not the original of any one of them,
+    # and filing N copies of it would fake-satisfy the originals audit.
     input_hash=$(file_sha256 "$staged_path")
     is_pdf=0
     is_doc=0
@@ -746,12 +792,9 @@ print(template.replace("<STAGED_PATH>", sys.argv[2]).replace("<DOMAIN>", domain)
     esac
     while IFS= read -r produced_path; do
       [[ -n "$produced_path" ]] || continue
-      if inject_hash "$produced_path" "$input_hash"; then
-        log "  injected source_hash into $produced_path"
-      fi
-      if (( is_pdf )); then
-        folder=$(dirname "$produced_path")
-        slug=$(basename "$produced_path" .summary.md)
+      folder=$(dirname "$produced_path")
+      slug=$(basename "$produced_path" .summary.md)
+      if (( is_pdf )) && (( num_produced == 1 )); then
         pdf_target="$folder/$slug.pdf"
         if [[ ! -f "$pdf_target" ]]; then
           if cp "$staged_path" "$pdf_target"; then
@@ -761,9 +804,7 @@ print(template.replace("<STAGED_PATH>", sys.argv[2]).replace("<DOMAIN>", domain)
           fi
         fi
       fi
-      if (( is_doc )); then
-        folder=$(dirname "$produced_path")
-        slug=$(basename "$produced_path" .summary.md)
+      if (( is_doc )) && (( num_produced == 1 )); then
         snap_target="$folder/$slug.snapshot.md"
         if [[ ! -f "$snap_target" ]]; then
           if cp "$staged_path" "$snap_target"; then
@@ -772,6 +813,27 @@ print(template.replace("<STAGED_PATH>", sys.argv[2]).replace("<DOMAIN>", domain)
             log "  WARNING: failed to copy snapshot to $snap_target"
           fi
         fi
+      fi
+      # Anchor future dedup: hash the summary's own source artifact, not the
+      # run's input. A multi-summary run used to stamp the single input's
+      # hash onto every summary it produced, which (a) is the wrong value
+      # for each individual source and (b) made any later PDF whose hash
+      # collided with it bounce as a "duplicate" of an unrelated summary.
+      artifact=""
+      [[ -f "$folder/$slug.pdf" ]] && artifact="$folder/$slug.pdf"
+      [[ -z "$artifact" && -f "$folder/$slug.snapshot.md" ]] && artifact="$folder/$slug.snapshot.md"
+      if [[ -n "$artifact" ]]; then
+        if inject_hash "$produced_path" "$(file_sha256 "$artifact")"; then
+          log "  injected source_hash into $produced_path"
+        fi
+      elif (( num_produced == 1 )); then
+        # No artifact on disk (e.g. .txt/.url input and the agent wrote no
+        # snapshot) — the input's own hash still dedups an identical re-drop.
+        if inject_hash "$produced_path" "$input_hash"; then
+          log "  injected source_hash into $produced_path"
+        fi
+      else
+        log "  NOTE: no per-source artifact for $produced_path; leaving source_hash unset"
       fi
       # Promotion: relocate the entire produced folder into the preprint's
       # category as <category>/<produced-slug>/ so the directory name matches
