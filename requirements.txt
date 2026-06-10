@@ -1,5 +1,5 @@
 flask>=3.0,<4
 pyyaml>=6.0,<7
 markdown>=3.5,<4
-bleach>=6.0,<7
+nh3>=0.2,<1
 pypdf>=4.0,<6

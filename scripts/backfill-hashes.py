@@ -57,10 +57,12 @@ def hash_file(path: Path) -> str:
 def inject_source_hash(summary: Path, hash_val: str) -> bool:
     """Insert `source_hash: "..."` into frontmatter. Returns True if changed."""
     text = summary.read_text()
-    if "source_hash:" in text:
-        return False
     fm, end = parse_frontmatter(text)
     if fm is None:
+        return False
+    # Check the frontmatter only — a body that merely mentions the literal
+    # string "source_hash:" must not block injection.
+    if "source_hash:" in text[: end + 1]:
         return False
     new_line = f'source_hash: "{hash_val}"\n'
     m = re.search(r"^tldr:[^\n]*\n", text[: end + 1], re.MULTILINE)
@@ -79,7 +81,8 @@ def main():
         if category.startswith(".") or category.startswith("_"):
             continue
         text = summary.read_text()
-        if "source_hash:" in text:
+        fm, end = parse_frontmatter(text)
+        if fm is not None and "source_hash:" in text[: end + 1]:
             skipped += 1
             continue
         src = find_source_file(summary)

@@ -36,6 +36,9 @@ Configuration (lowest to highest precedence):
   DASHBOARD_EXTRA_ORIGINS=             optional, comma-separated list of extra
                                        browser origins permitted to POST to
                                        the dashboard (CSRF allowlist)
+  DASHBOARD_PORT=7341                  localhost port the dashboard binds to
+  PREPRINT_REFRESH_DAYS=7              re-check preprint cache entries older
+                                       than this many days
 USAGE
       exit 0 ;;
     *) echo "unknown arg: $arg" >&2; exit 2 ;;
@@ -43,13 +46,29 @@ USAGE
 done
 
 # --- Local config (.env at repo root, gitignored) -----------------------------
-# Sourced before defaults are applied so vars set there are picked up; vars
-# already set in the calling environment win over .env (standard precedence).
+# Sourced before defaults are applied so vars set there are picked up. The
+# documented precedence is: command-line env vars > .env > defaults. Plain
+# `source` would let .env clobber the caller's environment, so snapshot any
+# already-set values first and restore them after sourcing.
+CONFIG_VARS=(DOMAIN LIBRARY INBOX LABEL_PREFIX CLAUDE_BIN CATEGORY_ORDER
+             OPENALEX_EMAIL DASHBOARD_EXTRA_ORIGINS DASHBOARD_PORT
+             PREPRINT_REFRESH_DAYS)
 if [[ -f "$REPO_ROOT/.env" ]]; then
+  _pre_vals=()
+  for _v in "${CONFIG_VARS[@]}"; do
+    if [[ -n "${!_v+x}" ]]; then
+      _pre_vals+=("$_v=${!_v}")
+    fi
+  done
   set -a
   # shellcheck disable=SC1091
   source "$REPO_ROOT/.env"
   set +a
+  if (( ${#_pre_vals[@]} > 0 )); then
+    for _kv in "${_pre_vals[@]}"; do
+      export "${_kv?}"
+    done
+  fi
 fi
 
 # --- Configurable via env vars; sensible defaults otherwise -------------------
@@ -61,9 +80,17 @@ CATEGORY_ORDER="${CATEGORY_ORDER:-}"
 DOMAIN="${DOMAIN:-A general-purpose personal research library.}"
 OPENALEX_EMAIL="${OPENALEX_EMAIL:-}"
 DASHBOARD_EXTRA_ORIGINS="${DASHBOARD_EXTRA_ORIGINS:-}"
+DASHBOARD_PORT="${DASHBOARD_PORT:-7341}"
+PREPRINT_REFRESH_DAYS="${PREPRINT_REFRESH_DAYS:-7}"
 
-# Expand leading "~/" since shell parameter expansion doesn't.
-expand_tilde() { printf '%s' "${1/#\~\//$HOME/}"; }
+# Expand a leading "~/" (or a bare "~") since parameter expansion doesn't.
+expand_tilde() {
+  if [[ "$1" == "~" ]]; then
+    printf '%s' "$HOME"
+  else
+    printf '%s' "${1/#\~\//$HOME/}"
+  fi
+}
 LIBRARY="$(expand_tilde "$LIBRARY")"
 INBOX="$(expand_tilde "$INBOX")"
 
@@ -94,7 +121,7 @@ say "mode:      $([[ $LINK_MODE == 1 ]] && echo 'symlink (single source of truth
 
 # --- Directories --------------------------------------------------------------
 say "Creating directories..."
-mkdir -p "$INBOX/.staged" "$INBOX/_failed" \
+mkdir -p "$INBOX/.staged" "$INBOX/_failed" "$INBOX/_duplicate" "$INBOX/_promoted" \
          "$CONFIG" "$SCRIPTS_DIR" "$PLISTS_DIR"
 
 # --- Python venv with deps ----------------------------------------------------
@@ -149,9 +176,13 @@ fi
 # --- Render plists ------------------------------------------------------------
 render_plist() {
   local src="$1" dest="$2"
-  # DOMAIN is free text — escape sed-special chars, collapse newlines.
+  # DOMAIN is free text destined for an XML document: escape XML entities
+  # first (a literal & or < would make plutil -lint reject the plist), then
+  # escape sed-replacement specials, and collapse newlines.
   local domain_esc
-  domain_esc=$(printf '%s' "$DOMAIN" | tr '\n' ' ' | sed -e 's/[\\&|]/\\&/g')
+  domain_esc=$(printf '%s' "$DOMAIN" | tr '\n' ' ' \
+    | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' \
+    | sed -e 's/[\\&|]/\\&/g')
   sed -e "s|__HOME__|${HOME}|g" \
       -e "s|__LIBRARY__|${LIBRARY}|g" \
       -e "s|__INBOX__|${INBOX}|g" \
@@ -161,6 +192,8 @@ render_plist() {
       -e "s|__DOMAIN__|${domain_esc}|g" \
       -e "s|__OPENALEX_EMAIL__|${OPENALEX_EMAIL}|g" \
       -e "s|__DASHBOARD_EXTRA_ORIGINS__|${DASHBOARD_EXTRA_ORIGINS}|g" \
+      -e "s|__DASHBOARD_PORT__|${DASHBOARD_PORT}|g" \
+      -e "s|__PREPRINT_REFRESH_DAYS__|${PREPRINT_REFRESH_DAYS}|g" \
       "$src" > "$dest"
   plutil -lint "$dest" >/dev/null
 }
@@ -187,7 +220,7 @@ reload_agent "$PREPRINT_LABEL"
 # --- Summary ------------------------------------------------------------------
 echo
 say "Installed."
-echo "  Dashboard:     http://localhost:7341"
+echo "  Dashboard:     http://localhost:${DASHBOARD_PORT}"
 echo "  Inbox:         $INBOX"
 echo "  Library:       $LIBRARY"
 echo "  Logs:          /tmp/claude-source-intake{,.err}.log"

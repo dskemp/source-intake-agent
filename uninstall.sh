@@ -48,7 +48,8 @@ rm -f "$PLISTS_DIR/${LABEL_PREFIX}.claude-source-intake.plist" \
       "$SCRIPTS_DIR/claude-source-intake.sh" \
       "$SCRIPTS_DIR/claude-source-intake-ui.py" \
       "$SCRIPTS_DIR/claude-source-intake-regen-index.py" \
-      "$SCRIPTS_DIR/claude-source-intake-check-preprints.py"
+      "$SCRIPTS_DIR/claude-source-intake-check-preprints.py" \
+      "$SCRIPTS_DIR/claude-source-intake-detect-promotion.py"
 
 if (( PURGE )); then
   echo "==> purging config dir $CONFIG"

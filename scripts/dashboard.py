@@ -12,11 +12,13 @@ import os
 import re
 import shutil
 import subprocess
+import threading
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 
-import bleach
 import markdown
+import nh3
 import yaml
 from flask import Flask, abort, jsonify, redirect, render_template_string, request, send_file
 
@@ -54,6 +56,19 @@ ALLOWED_ORIGINS = frozenset({
     *_extra_origins,
 })
 
+# Hosts we answer for at all. DNS-rebinding defense: a malicious page can
+# point its own hostname at 127.0.0.1 and then read GET responses same-origin
+# (the Origin/Sec-Fetch-Site checks below only cover state-changing requests).
+# The Host header still carries the attacker's hostname, so reject anything
+# we don't recognize.
+ALLOWED_HOSTS = frozenset({
+    f"127.0.0.1:{PORT}",
+    f"localhost:{PORT}",
+    "127.0.0.1",
+    "localhost",
+    *(urlsplit(o).netloc.lower() for o in _extra_origins if urlsplit(o).netloc),
+})
+
 # UUID prefix the worker assigns to staged input files. Must stay in sync
 # with the `uuidgen` line in scripts/worker.sh — if that contract changes,
 # strip_uuid and stray-detection here will break.
@@ -61,9 +76,10 @@ UUID_PREFIX = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9
 
 # Whitelist for sanitizing LLM-generated markdown. LLM-written summaries
 # are untrusted output — a prompt-injecting PDF could induce hostile HTML.
-# Bleach strips anything not on this list, including script tags and event
-# handlers on permitted tags.
-ALLOWED_HTML_TAGS = [
+# nh3 (the maintained successor to bleach, binding Rust's ammonia) strips
+# anything not on this list, including script tags and event handlers on
+# permitted tags.
+ALLOWED_HTML_TAGS = {
     "p", "br", "strong", "em", "del", "code", "pre",
     "h1", "h2", "h3", "h4", "h5", "h6",
     "ul", "ol", "li",
@@ -71,13 +87,13 @@ ALLOWED_HTML_TAGS = [
     "a", "img",
     "table", "thead", "tbody", "tr", "th", "td",
     "sup", "sub",
-]
-ALLOWED_HTML_ATTRS = {
-    "a": ["href", "title"],
-    "img": ["src", "alt", "title"],
-    "*": ["id", "class"],
 }
-ALLOWED_HTML_PROTOCOLS = ["http", "https", "mailto"]
+ALLOWED_HTML_ATTRS = {
+    "a": {"href", "title"},
+    "img": {"src", "alt", "title"},
+    "*": {"id", "class"},
+}
+ALLOWED_HTML_PROTOCOLS = {"http", "https", "mailto"}
 
 # File extensions /api/open will hand off to the OS. Anything else (e.g.
 # executables, scripts) is refused even if it lives inside the library.
@@ -563,6 +579,14 @@ app = Flask(__name__)
 
 
 @app.before_request
+def validate_host():
+    """DNS-rebinding defense for read endpoints — see ALLOWED_HOSTS above."""
+    host = (request.host or "").lower()
+    if host not in ALLOWED_HOSTS:
+        abort(403, "unrecognized Host header")
+
+
+@app.before_request
 def block_cross_origin_post():
     """CSRF defense. The dashboard binds to 127.0.0.1 only, but any local
     process — including a browser visiting a malicious site that scripts
@@ -772,7 +796,10 @@ TEMPLATE = """<!doctype html>
         {% if r.outcome == 'success' %}<span class="badge ok">success</span>
         {% elif r.outcome == 'duplicate' %}<span class="badge dup">duplicate</span>
         {% elif r.outcome == 'backfill' %}<span class="badge info">backfill</span>
-        {% else %}<span class="badge bad">failure</span>{% endif %}
+        {% elif r.outcome == 'promoted' %}<span class="badge ok">promoted</span>
+        {% elif r.outcome == 'promote-staged' %}<span class="badge info">promote-staged</span>
+        {% elif r.outcome == 'failure' %}<span class="badge bad">failure</span>
+        {% else %}<span class="badge info">{{ r.outcome }}</span>{% endif %}
       </td>
       <td class="mute">{% if r.cost_usd %}${{ '%.3f'|format(r.cost_usd) }}{% else %}—{% endif %}</td>
       <td class="mute">{% if r.duration_ms %}{{ '%.1f'|format(r.duration_ms / 1000) }}s{% else %}—{% endif %}</td>
@@ -1228,12 +1255,11 @@ def render_markdown(body: str) -> str:
     when the user opens the source page."""
     md = markdown.Markdown(extensions=["extra", "sane_lists", "smarty"], output_format="html5")
     raw_html = md.convert(body)
-    return bleach.clean(
+    return nh3.clean(
         raw_html,
         tags=ALLOWED_HTML_TAGS,
         attributes=ALLOWED_HTML_ATTRS,
-        protocols=ALLOWED_HTML_PROTOCOLS,
-        strip=True,
+        url_schemes=ALLOWED_HTML_PROTOCOLS,
     )
 
 
@@ -1318,6 +1344,44 @@ def api_open():
     return ("", 204)
 
 
+def _parse_log_lines(text: str) -> list:
+    events = []
+    for line in text.splitlines():
+        parsed = parse_event(line)
+        if parsed:
+            events.extend(parsed)
+    return events
+
+
+# Incremental-parse state for current-run.log. The frontend polls every 1.5s
+# during a run and stream-json logs grow to megabytes on big PDFs, so
+# re-reading and re-JSON-parsing the whole file each poll is wasted work.
+_CURRENT_LOG_LOCK = threading.Lock()
+_CURRENT_LOG_STATE = {"offset": 0, "events": []}
+
+
+def _current_log_events(path: Path) -> list:
+    """Parse only the bytes appended since the last poll. The worker only
+    appends within a run and truncates to zero at the start of the next one,
+    so a size smaller than our saved offset means a new run began — reset."""
+    with _CURRENT_LOG_LOCK:
+        size = path.stat().st_size
+        if size < _CURRENT_LOG_STATE["offset"]:
+            _CURRENT_LOG_STATE["offset"] = 0
+            _CURRENT_LOG_STATE["events"] = []
+        with open(path, "rb") as f:
+            f.seek(_CURRENT_LOG_STATE["offset"])
+            data = f.read()
+        nl = data.rfind(b"\n")
+        if nl != -1:  # only consume complete lines; a partial tail waits
+            _CURRENT_LOG_STATE["offset"] += nl + 1
+            _CURRENT_LOG_STATE["events"].extend(
+                _parse_log_lines(data[: nl + 1].decode("utf-8", "replace"))
+            )
+            del _CURRENT_LOG_STATE["events"][:-400]
+        return list(_CURRENT_LOG_STATE["events"])
+
+
 @app.route("/api/run-log")
 def api_run_log():
     which = request.args.get("which", "current")
@@ -1325,13 +1389,13 @@ def api_run_log():
     path = CONFIG / fname
     if not path.exists():
         return jsonify({"events": [], "exists": False})
-    events = []
     try:
-        with open(path) as f:
-            for line in f:
-                parsed = parse_event(line)
-                if parsed:
-                    events.extend(parsed)
+        if which == "current":
+            events = _current_log_events(path)
+        else:
+            # last-run.log is replaced wholesale (cp) and requested rarely
+            # (when the user opens the replay panel) — full parse is fine.
+            events = _parse_log_lines(path.read_text(errors="replace"))
     except Exception as ex:
         return jsonify({"events": [], "exists": True, "error": str(ex)})
     return jsonify({"events": events[-200:], "exists": True})
@@ -1431,6 +1495,12 @@ def discard_stray(filename):
 @app.route("/prompt", methods=["POST"])
 def save_prompt():
     content = request.form.get("content", "")
+    # Guard against bricking the worker: an empty prompt or one missing the
+    # <STAGED_PATH> token would make every subsequent run process nothing.
+    if not content.strip():
+        return redirect("/?flash=Prompt+NOT+saved+—+it+was+empty")
+    if "<STAGED_PATH>" not in content:
+        return redirect("/?flash=Prompt+NOT+saved+—+missing+the+%3CSTAGED_PATH%3E+token")
     PROMPT_FILE.parent.mkdir(parents=True, exist_ok=True)
     PROMPT_FILE.write_text(content)
     return redirect("/?flash=Prompt+saved")
