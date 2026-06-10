@@ -125,9 +125,11 @@ $INBOX/                                ← drop files here
    --permission-mode acceptEdits --output-format stream-json --verbose`,
    redirecting output to `current-run.log` so the dashboard can tail it live.
 5. On success (claude exit 0 + a new `*.summary.md` appears under a category
-   folder): inject `source_hash: "<sha256>"` into the new summary's
-   frontmatter, delete the staged file, regenerate `INDEX.md`, append a JSONL
-   entry with cost + duration to `runs.jsonl`.
+   folder): inject `source_hash: "<sha256>"` into each new summary's
+   frontmatter (hashing that summary's own filed `.pdf`/`.snapshot.md`, not
+   the run's input — a digest input can produce several summaries), delete
+   the staged file, regenerate `INDEX.md`, append a JSONL entry with cost +
+   duration to `runs.jsonl`.
 6. On failure: move the staged file to `_failed/` with its log next to it.
    Any summary folders the failed run already created are quarantined to
    `_failed/_partial/` so a half-written summary can't dedup-block a retry.
@@ -353,6 +355,16 @@ matched summary; you'll also see it in the dashboard's Duplicates section.
 To force re-processing of a file you really do want to re-summarize: delete
 the matched summary first, then move the file from `_duplicate/` back to the
 inbox.
+
+**Backfill (missing originals):** if the matched summary is *missing* its
+source artifact (`<slug>.pdf` / `<slug>.snapshot.md` deleted or never filed),
+a matching drop is not a duplicate — the worker files it into the summary's
+folder as the missing original and force-refreshes `source_hash:`, again with
+no claude invocation. Besides hash/URL matches, the worker recognizes the
+original by filename-vs-slug similarity, and for PDFs by the embedded Title
+metadata and first-page text matched against the summary's `title:` — so a
+re-downloaded `3582269.3615599.pdf` finds its summary even though the
+filename says nothing about the paper.
 
 ## Preprint publication tracking
 
