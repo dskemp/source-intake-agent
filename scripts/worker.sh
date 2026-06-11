@@ -439,18 +439,31 @@ done
 
 NOW=$(date +%s)
 processed_any=0
+
+# Drain loop: the for-glob below is expanded once per pass, so a file dropped
+# while a pass is in flight is invisible to it — and launchd does not reliably
+# re-deliver WatchPaths events that arrive while the job is already running.
+# Without a re-scan such a file would sit until the next inbox disturbance (or
+# the plist's 5-minute StartInterval backstop). So: keep re-globbing until a
+# full pass claims nothing. pass_claimed is set only when a file is actually
+# moved out of the inbox; files merely skipped (still being written, backfill
+# races) must not count, or an active writer would spin this loop. The body is
+# deliberately not re-indented: its heredocs and quoted inline-Python blocks
+# are column-sensitive.
+while :; do
+pass_claimed=0
 for path in "$INBOX"/*; do
   [[ -f "$path" ]] || continue
   base=$(basename "$path")
   [[ "$base" == .* ]] && continue
 
   # File-too-new guard: a file still being written has a recent mtime, and
-  # processing it mid-copy yields a truncated read. We can't just skip — the
-  # launchd plist uses WatchPaths only (no StartInterval), so if we exit here
-  # nothing re-fires and the file stays stuck. Wait until the file ages past
+  # processing it mid-copy yields a truncated read. We can't just skip — a
+  # skipped file wouldn't re-fire WatchPaths, leaving it stuck until the
+  # plist's 5-minute StartInterval sweep. Wait until the file ages past
   # the threshold, then re-check mtime to confirm it's no longer being
   # written. If mtime moved during the wait the writer is still active, so
-  # punt (next directory event will retrigger us).
+  # punt (the next directory event or interval tick will retrigger us).
   mtime=$(stat -f %m "$path")
   age=$(( $(date +%s) - mtime ))
   if (( age < 5 )); then
@@ -527,6 +540,7 @@ for path in "$INBOX"/*; do
         log "backfill failed: could not move '$base' to $pdf_target; leaving in inbox"
         continue
       fi
+      pass_claimed=1
       log "backfilled missing original for '$base' (matched by $backfill_kind) -> $pdf_target"
       # Re-anchor dedup on the artifact we just filed. Force-replace: a
       # fuzzy/title match means whatever source_hash the frontmatter carried
@@ -566,6 +580,7 @@ for path in "$INBOX"/*; do
           n=$((n+1))
         done
         mv "$path" "$pend_dest"
+        pass_claimed=1
         cat > "${pend_dest}.log" <<EOF
 Promotion candidate for: $preprint_summary
 Detected: $(date -u '+%Y-%m-%dT%H:%M:%SZ')
@@ -640,6 +655,7 @@ PY
         n=$((n+1))
       done
       mv "$path" "$dup_dest"
+      pass_claimed=1
       cat > "${dup_dest}.log" <<EOF
 Duplicate of: $matched_path
 Matched by: $matched_reason
@@ -682,6 +698,7 @@ print(out.strip() or "input")
     log "  failed to stage '$base' (already claimed?)"
     continue
   fi
+  pass_claimed=1
   # Bump mtime to "processing start" — mv preserves the source file's mtime,
   # so without this the dashboard's elapsed-time ticker (derived from the
   # staged file's mtime) reports "time since the PDF was downloaded" instead
@@ -998,6 +1015,9 @@ print(template.replace("<STAGED_PATH>", sys.argv[2]).replace("<DOMAIN>", domain)
   find "$INBOX/.staged" -mindepth 1 -type f -delete 2>/dev/null || true
 
   rm -f "$produced_list" "$sentinel"
+done
+(( pass_claimed )) || break
+log "pass complete; re-scanning inbox for files dropped mid-run"
 done
 
 if (( processed_any == 0 )); then

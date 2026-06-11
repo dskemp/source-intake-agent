@@ -106,14 +106,17 @@ $INBOX/                                ← drop files here
   └── claude-source-intake-detect-promotion.py
 
 ~/Library/LaunchAgents/
-  ├── <prefix>.claude-source-intake.plist                 (WatchPaths trigger)
+  ├── <prefix>.claude-source-intake.plist                 (WatchPaths + 5-min interval)
   ├── <prefix>.claude-source-intake-ui.plist              (dashboard server)
   └── <prefix>.claude-source-intake-preprint-check.plist  (weekly cron)
 ```
 
 **Flow per file drop:**
 
-1. launchd's `WatchPaths` on the inbox fires the worker.
+1. launchd's `WatchPaths` on the inbox fires the worker (a 5-minute
+   `StartInterval` backstop catches files whose directory event was missed,
+   and the worker re-scans the inbox after each pass so files dropped while
+   a run is in progress are picked up by the same run).
 2. **Dedup check** (before staging): SHA-256 the input bytes (and, for
    `.txt`/`.url` inputs, extract the URL). Compare against every existing
    summary's `source_hash:` and `url:` frontmatter fields. On match: move the
