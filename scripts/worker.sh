@@ -51,7 +51,7 @@ RUN_LOG_KEEP="${RUN_LOG_KEEP:-50}"               # number of per-iteration archi
 # _promoted/_pending/ for manual review. off = skip detection entirely.
 PREPRINT_PROMOTION_MODE="${PREPRINT_PROMOTION_MODE:-auto}"
 
-mkdir -p "$INBOX/.staged" "$INBOX/_failed" "$INBOX/_duplicate" "$INBOX/_promoted" "$CONFIG" "$RUN_LOGS_DIR"
+mkdir -p "$INBOX/.staged" "$INBOX/_failed" "$INBOX/_duplicate" "$INBOX/_promoted" "$INBOX/_notes" "$CONFIG" "$RUN_LOGS_DIR"
 
 if [[ ! -f "$PROMPT_FILE" ]]; then
   echo "ERROR: prompt file missing at $PROMPT_FILE" >&2
@@ -144,10 +144,30 @@ is_pdf = input_path.suffix.lower() == '.pdf'
 is_doc = input_path.suffix.lower() in ('.md', '.html', '.htm')
 can_backfill = is_pdf or is_doc
 
+def is_staging_note(p):
+    """True if p is a draft-section candidate note (status:
+    candidate-for-intake) rather than a real content capture. Such a note
+    filed as <slug>.snapshot.md is metadata about the source, not the
+    source — counting it as the original would block backfill of the
+    real document."""
+    head = read_frontmatter_text(p)
+    if head is None:
+        return False
+    end = head.find('\n---\n', 4)
+    if end == -1:
+        return False
+    try:
+        fm = yaml.safe_load(head[4:end]) or {}
+    except yaml.YAMLError:
+        return False
+    return str(fm.get('status') or '').strip() == 'candidate-for-intake'
+
 def has_original(summary_path):
     slug = summary_path.name[: -len('.summary.md')]
-    return (summary_path.parent / f"{slug}.pdf").exists() or \
-           (summary_path.parent / f"{slug}.snapshot.md").exists()
+    if (summary_path.parent / f"{slug}.pdf").exists():
+        return True
+    snap = summary_path.parent / f"{slug}.snapshot.md"
+    return snap.exists() and not is_staging_note(snap)
 
 def normalize(s):
     s = (s or "").lower()
@@ -248,6 +268,37 @@ if can_backfill and fuzzy_candidates:
     second_score = scored[1][0] if len(scored) > 1 else 0.0
     if top_score >= 0.70 and (top_score - second_score) >= 0.15:
         print(f"{top_summary}\tbackfill:fuzzy")
+PY
+}
+
+# Classify a .md inbox input as a draft-section staging note. Echoes the
+# note's source URL (pdf_url preferred, then url) when its frontmatter says
+# `status: candidate-for-intake`; echoes "NONE" for a candidate note with no
+# fetchable URL; echoes nothing for ordinary documents.
+candidate_note_url() {
+  local input_path="$1"
+  "$PYTHON" - "$input_path" <<'PY'
+import sys
+import yaml
+
+try:
+    with open(sys.argv[1], errors='replace') as f:
+        head = f.read(65536)
+except Exception:
+    sys.exit(0)
+if not head.startswith('---\n'):
+    sys.exit(0)
+end = head.find('\n---\n', 4)
+if end == -1:
+    sys.exit(0)
+try:
+    fm = yaml.safe_load(head[4:end]) or {}
+except yaml.YAMLError:
+    sys.exit(0)
+if str(fm.get('status') or '').strip() != 'candidate-for-intake':
+    sys.exit(0)
+url = str(fm.get('pdf_url') or fm.get('url') or '').strip()
+print(url if url.startswith(('http://', 'https://')) else 'NONE')
 PY
 }
 
@@ -486,6 +537,122 @@ for path in "$INBOX"/*; do
   promote_target_dir=""
   promote_category_dir=""
   promote_preprint_rel=""
+
+  # --- Staging-note candidates ----------------------------------------------
+  # draft-section stages metadata-only candidate notes: .md files whose
+  # frontmatter carries `status: candidate-for-intake` plus a pdf_url/url
+  # pointing at the real document. The note is an intake REQUEST, not source
+  # content — filed as <slug>.snapshot.md it fake-satisfies the originals
+  # audit and blocks a later backfill of the real PDF. Fetch the document the
+  # note points at and intake THAT in this same iteration — the drain loop's
+  # re-scan would also pick it up next pass, but the swap keeps note and
+  # source in one iteration so the run log reads as a single job.
+  if [[ "$base" == *.[Mm][Dd] ]]; then
+    cand_url=$(candidate_note_url "$path" || true)
+    if [[ "$cand_url" == "NONE" ]]; then
+      log "candidate note '$base' has no fetchable pdf_url/url; routing to _failed/"
+      fail_dest="$INBOX/_failed/$base"
+      n=1
+      while [[ -e "$fail_dest" ]]; do
+        fail_dest="$INBOX/_failed/${base%.*}.${n}.${base##*.}"
+        n=$((n+1))
+      done
+      mv "$path" "$fail_dest"
+      pass_claimed=1
+      cat > "${fail_dest}.log" <<EOF
+Staging-note candidate with no fetchable pdf_url/url in its frontmatter.
+Detected: $(date -u '+%Y-%m-%dT%H:%M:%SZ')
+
+The note was not intaked: it is metadata about a source, not the source
+itself, and filing it as a snapshot would block backfill of the real
+document. Add a pdf_url/url to the frontmatter and move it back to the
+inbox, or download the document manually and drop that in instead.
+EOF
+      cand_paths_file=$(mktemp -t intake-cand-paths)
+      cand_err_file=$(mktemp -t intake-cand-err)
+      printf 'candidate note has no fetchable url\n' > "$cand_err_file"
+      append_run "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$base" "failure" "$cand_paths_file" "$cand_err_file" ""
+      rm -f "$cand_paths_file" "$cand_err_file"
+      continue
+    elif [[ -n "$cand_url" ]]; then
+      log "candidate note '$base'; fetching source: $cand_url"
+      fetch_tmp=$(mktemp -t intake-fetch)
+      if curl -fsSL --max-time 300 --retry 2 -o "$fetch_tmp" "$cand_url"; then
+        # Name the fetched file after the note's stem (the suggested slug,
+        # minus any .candidate marker) so dedup/backfill matches it strongly.
+        fetch_stem="${base%.*}"
+        fetch_stem="${fetch_stem%.candidate}"
+        if [[ "$(head -c 4 "$fetch_tmp" 2>/dev/null)" == "%PDF" ]]; then
+          fetch_base="${fetch_stem}.pdf"
+        else
+          # The URL served web content rather than a PDF; intake it as a
+          # document, which legitimately files as <slug>.snapshot.md.
+          fetch_base="${fetch_stem}.html"
+        fi
+        fetch_dest="$INBOX/$fetch_base"
+        n=1
+        while [[ -e "$fetch_dest" ]]; do
+          fetch_dest="$INBOX/${fetch_base%.*}.${n}.${fetch_base##*.}"
+          n=$((n+1))
+        done
+        if ! mv "$fetch_tmp" "$fetch_dest"; then
+          log "  could not move fetched file into inbox; leaving note for a retry"
+          rm -f "$fetch_tmp"
+          continue
+        fi
+        note_dest="$INBOX/_notes/$base"
+        n=1
+        while [[ -e "$note_dest" ]]; do
+          note_dest="$INBOX/_notes/${base%.*}.${n}.${base##*.}"
+          n=$((n+1))
+        done
+        if mv "$path" "$note_dest" 2>/dev/null; then
+          cat > "${note_dest}.log" <<EOF
+Staging-note candidate processed.
+Fetched: $cand_url
+Filed fetched source into inbox as: $(basename "$fetch_dest")
+Detected: $(date -u '+%Y-%m-%dT%H:%M:%SZ')
+EOF
+        else
+          log "  WARNING: could not archive note '$base' to _notes/; removing it"
+          rm -f "$path" 2>/dev/null || true
+        fi
+        cand_paths_file=$(mktemp -t intake-cand-paths)
+        printf '%s\n' "$fetch_dest" > "$cand_paths_file"
+        append_run "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$base" "candidate-fetched" "$cand_paths_file" "" ""
+        rm -f "$cand_paths_file"
+        path="$fetch_dest"
+        base=$(basename "$fetch_dest")
+        log "  fetched -> '$base'; continuing this iteration with the fetched source"
+      else
+        rm -f "$fetch_tmp"
+        log "  fetch failed for candidate '$base' ($cand_url); routing note to _failed/"
+        fail_dest="$INBOX/_failed/$base"
+        n=1
+        while [[ -e "$fail_dest" ]]; do
+          fail_dest="$INBOX/_failed/${base%.*}.${n}.${base##*.}"
+          n=$((n+1))
+        done
+        mv "$path" "$fail_dest"
+        pass_claimed=1
+        cat > "${fail_dest}.log" <<EOF
+Staging-note candidate; fetching its source failed.
+URL: $cand_url
+Detected: $(date -u '+%Y-%m-%dT%H:%M:%SZ')
+
+The note was not intaked: filing it as a snapshot would block backfill of
+the real document. To retry the fetch, move this file back to the inbox;
+or download the document manually and drop that in instead.
+EOF
+        cand_paths_file=$(mktemp -t intake-cand-paths)
+        cand_err_file=$(mktemp -t intake-cand-err)
+        printf 'candidate fetch failed: %s\n' "$cand_url" > "$cand_err_file"
+        append_run "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$base" "failure" "$cand_paths_file" "$cand_err_file" ""
+        rm -f "$cand_paths_file" "$cand_err_file"
+        continue
+      fi
+    fi
+  fi
 
   # --- Dedup check ----------------------------------------------------------
   dedup_result="$(check_dedup "$path" || true)"
