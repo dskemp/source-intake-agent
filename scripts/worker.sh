@@ -663,8 +663,21 @@ EOF
 
   log "processing '$base'"
 
+  # Stage under an ASCII-only name. Non-ASCII filename bytes (curly quotes,
+  # accents) don't survive the agent's path round-tripping — its Read tool
+  # gets ENOENT on a byte-for-byte-different rendering of the same visible
+  # name — and the agent burns its whole run on extraction workarounds.
+  # $base keeps the original name for logging and _failed/ routing; only
+  # the staged copy is renamed.
+  ascii_base=$("$PYTHON" -c '
+import sys, unicodedata
+name = unicodedata.normalize("NFKD", sys.argv[1])
+name = "".join(c for c in name if not unicodedata.combining(c))
+out = "".join(c if c.isascii() and c.isprintable() else "_" for c in name)
+print(out.strip() or "input")
+' "$base")
   uuid=$(uuidgen | tr '[:upper:]' '[:lower:]')
-  staged_path="$INBOX/.staged/${uuid}-${base}"
+  staged_path="$INBOX/.staged/${uuid}-${ascii_base}"
   if ! mv "$path" "$staged_path" 2>/dev/null; then
     log "  failed to stage '$base' (already claimed?)"
     continue
@@ -697,6 +710,9 @@ print(template.replace("<STAGED_PATH>", sys.argv[2]).replace("<DOMAIN>", domain)
   # WebFetch is allowlisted explicitly: acceptEdits only auto-approves file
   # edits, and in headless -p mode an unanswerable permission prompt is a
   # denial — without this, .txt/.url (web source) intake silently fails.
+  # pdftotext likewise: it's the agent's only sanctioned way to extract PDF
+  # text, and when it's denied the agent falls back to grepping `strings`
+  # output one fact at a time (slow, low-fidelity, dozens of Bash calls).
   # Deny rules block writes into .staged/ — Claude needs Read access
   # (granted via --add-dir) but the staging dir is a managed queue.
   # The // prefix marks absolute paths in Claude Code's permission DSL;
@@ -716,7 +732,7 @@ print(template.replace("<STAGED_PATH>", sys.argv[2]).replace("<DOMAIN>", domain)
         --permission-mode acceptEdits \
         --add-dir "$LIBRARY" \
         --add-dir "$INBOX/.staged" \
-        --allowed-tools "WebFetch" \
+        --allowed-tools "WebFetch" "Bash(pdftotext:*)" \
         --disallowed-tools \
           "Write(/${INBOX}/.staged/**)" \
           "Edit(/${INBOX}/.staged/**)" \
