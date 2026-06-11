@@ -22,6 +22,12 @@ Input format:
   .md / .html     treat as the snapshot of a web source
   .txt / .url     fetch the contained URL as a web source
 
+For PDFs, extract text with `pdftotext <file> -` — it is pre-approved.
+Most other shell commands are NOT and will be denied (this is a headless
+run; there is no one to answer permission prompts). If both the Read tool
+and pdftotext fail on the PDF, treat its content as inaccessible rather
+than reconstructing it through other commands.
+
 If you cannot access the source's actual content — the URL won't fetch,
 the PDF has no extractable text, the file is corrupt — do NOT write a
 summary from the filename or from background knowledge. Print a one-line
