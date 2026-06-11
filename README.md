@@ -439,6 +439,12 @@ auto-detects the promotion and swaps it in.
    - Runs normal intake on the published PDF, then moves the produced summary
      and filed PDF into the preprint's original category folder so it inherits
      that library slot.
+   - Stamps URL provenance into the produced summary: `url:` is set to the
+     cached `published_url` (the venue page from OpenAlex — the intake agent
+     only sees the bare PDF, so left alone it tends to write the arXiv link),
+     and the preprint's original URL is preserved as `preprint_url:`. Dedup
+     matches both keys, so a later drop of the old arXiv/SSRN link still
+     counts as a duplicate of the promoted entry.
    - Logs the iteration to `runs.jsonl` with `outcome: "promoted"`.
 5. `INDEX.md` regenerates with the new entry; `/preprints` no longer lists the
    old summary.

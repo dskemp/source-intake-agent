@@ -209,7 +209,13 @@ for summary in Path(library).glob('*/*/*.summary.md'):
         reason = 'backfill:hash' if (can_backfill and not has_original(summary)) else 'hash'
         print(f"{summary}\t{reason}")
         sys.exit(0)
-    if input_url_canon and canon_url(fm.get('url') or '') == input_url_canon:
+    # Match preprint_url: too — a promoted summary's url: is the published
+    # venue, but a later drop of the original arXiv/SSRN link must still
+    # dedup against it rather than intake a second copy.
+    if input_url_canon and input_url_canon in (
+        canon_url(fm.get('url') or ''),
+        canon_url(fm.get('preprint_url') or ''),
+    ):
         reason = 'backfill:url' if (can_backfill and not has_original(summary)) else 'url'
         print(f"{summary}\t{reason}")
         sys.exit(0)
@@ -339,6 +345,51 @@ if 'source_hash:' in text[:end + 1]:
 m = re.search(r'^tldr:[^\n]*\n', text[:end + 1], re.MULTILINE)
 insert_at = m.end() if m else end + 1
 path.write_text(text[:insert_at] + new_line + text[insert_at:])
+PY
+}
+
+# Stamp URL provenance into a promoted summary's frontmatter.
+# $2 (published_url, may be empty): force-replaces the url: line — the intake
+# agent only saw the bare PDF, so the cache's OpenAlex venue page beats
+# whatever it inferred. $3 (preprint_url, may be empty): recorded as
+# preprint_url: unless it matches the summary's final url or the key is
+# already present (idempotent).
+inject_urls() {
+  local summary_path="$1" published_url="$2" preprint_url="$3"
+  "$PYTHON" - "$summary_path" "$published_url" "$preprint_url" <<'PY'
+import re, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+published_url = sys.argv[2].strip()
+preprint_url = sys.argv[3].strip()
+text = path.read_text()
+if not text.startswith('---\n'):
+    sys.exit(1)
+end = text.find('\n---\n', 4)
+if end == -1:
+    sys.exit(1)
+fm = text[:end + 1]
+
+def yaml_quote(u):
+    return '"' + u.replace('\\', '').replace('"', '') + '"'
+
+if published_url:
+    new_line = f'url: {yaml_quote(published_url)}\n'
+    fm, n = re.subn(r'^url:[^\n]*\n', new_line, fm, count=1, flags=re.MULTILINE)
+    if not n:
+        fm += new_line
+if preprint_url and not re.search(r'^preprint_url:', fm, re.MULTILINE):
+    m = re.search(r'^url:[^\n]*\n', fm, re.MULTILINE)
+    current_url = ''
+    if m:
+        current_url = m.group(0).split(':', 1)[1].strip().strip('"\'')
+    if current_url.rstrip('/') != preprint_url.rstrip('/'):
+        new_line = f'preprint_url: {yaml_quote(preprint_url)}\n'
+        insert_at = m.end() if m else len(fm)
+        fm = fm[:insert_at] + new_line + fm[insert_at:]
+new_text = fm + text[end + 1:]
+if new_text != text:
+    path.write_text(new_text)
 PY
 }
 
@@ -537,6 +588,8 @@ for path in "$INBOX"/*; do
   promote_target_dir=""
   promote_category_dir=""
   promote_preprint_rel=""
+  promote_published_url=""
+  promote_preprint_url=""
 
   # --- Staging-note candidates ----------------------------------------------
   # draft-section stages metadata-only candidate notes: .md files whose
@@ -783,10 +836,39 @@ Detected: $(date -u '+%Y-%m-%dT%H:%M:%SZ')
 The published PDF is being intaked in this tick. The produced summary will
 land in $preprint_dir (the preprint's original category folder).
 EOF
-      # Remove the preprint's cache entry so /preprints no longer lists it.
-      "$PYTHON" - "$CONFIG/preprint-checks.json" "$preprint_rel" <<'PY' || true
+      # Capture URL provenance before it disappears: the preprint's own url:
+      # (from the just-archived summary) survives as preprint_url: on the
+      # produced summary, and the cache entry's published_url replaces the
+      # intake agent's guess — it only sees the bare PDF, so for well-known
+      # papers it writes the arXiv link, not the venue page.
+      promote_preprint_url=$("$PYTHON" - "$archive_dir/$preprint_slug.summary.md" <<'PY' || true
+import sys
+import yaml
+try:
+    with open(sys.argv[1], errors='replace') as f:
+        head = f.read(65536)
+except Exception:
+    sys.exit(0)
+if not head.startswith('---\n'):
+    sys.exit(0)
+end = head.find('\n---\n', 4)
+if end == -1:
+    sys.exit(0)
+try:
+    fm = yaml.safe_load(head[4:end]) or {}
+except yaml.YAMLError:
+    sys.exit(0)
+url = str(fm.get('url') or '').strip()
+if url.startswith(('http://', 'https://')):
+    print(url)
+PY
+)
+      # Remove the preprint's cache entry so /preprints no longer lists it,
+      # echoing its published_url (if sane) for the post-intake injection.
+      promote_published_url=$("$PYTHON" - "$CONFIG/preprint-checks.json" "$preprint_rel" <<'PY' || true
 import json, sys
 from pathlib import Path
+from urllib.parse import urlsplit
 cache_path, rel = sys.argv[1], sys.argv[2]
 p = Path(cache_path)
 if not p.exists():
@@ -795,10 +877,31 @@ try:
     cache = json.loads(p.read_text())
 except Exception:
     sys.exit(0)
+entry = cache.get(rel)
+if isinstance(entry, dict):
+    url = str(entry.get('published_url') or '').strip()
+    # check-preprints already excludes preprint-server locations, but OpenAlex
+    # records are occasionally polluted (junk DOI registrations pointing at
+    # unrelated sites), so re-check the cheap invariants here; a value that
+    # fails just means the agent's url: is left untouched.
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        parts = None
+    host = parts.netloc.lower() if parts else ''
+    preprint_hosts = ('arxiv.org', 'ssrn.com', 'biorxiv.org', 'medrxiv.org', 'osf.io')
+    if (
+        parts is not None
+        and parts.scheme in ('http', 'https')
+        and host
+        and not any(host == h or host.endswith('.' + h) for h in preprint_hosts)
+    ):
+        print(url)
 if rel in cache:
     del cache[rel]
     p.write_text(json.dumps(cache, indent=2, sort_keys=True))
 PY
+)
       log "promoting '$base' over preprint $preprint_summary (archived to $archive_dir)"
       is_promotion=1
       promote_target_dir="$preprint_dir"
@@ -1070,6 +1173,20 @@ print(template.replace("<STAGED_PATH>", sys.argv[2]).replace("<DOMAIN>", domain)
               log "  WARNING: failed to move $produced_folder to $final_dir"
             fi
           fi
+        fi
+      fi
+      # Promotion: stamp URL provenance into the (possibly relocated) summary.
+      # Single-summary runs only — a multi-summary run can't say which one the
+      # promoted preprint corresponds to, so guessing would mislabel sources.
+      if (( is_promotion )) && (( num_produced == 1 )) && \
+         [[ -n "$promote_published_url" || -n "$promote_preprint_url" ]]; then
+        final_summary="$produced_path"
+        [[ -n "$promote_category_dir" && -f "$promote_category_dir/$slug/$slug.summary.md" ]] && \
+          final_summary="$promote_category_dir/$slug/$slug.summary.md"
+        if inject_urls "$final_summary" "$promote_published_url" "$promote_preprint_url"; then
+          log "  stamped url provenance into $final_summary"
+        else
+          log "  WARNING: failed to stamp url provenance into $final_summary"
         fi
       fi
     done < "$produced_list"
