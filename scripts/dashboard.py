@@ -23,10 +23,22 @@ import yaml
 from flask import Flask, abort, jsonify, redirect, render_template_string, request, send_file
 
 HOME = Path.home()
-INBOX = Path(os.environ.get("INBOX_PATH") or (HOME / "source-library-inbox"))
+
+
+def _required_path(var: str) -> Path:
+    # No fallback default: guessing a path would silently serve (and move
+    # files within) a directory tree the user never configured. launchd
+    # provides these via the installed plist; export them for manual runs.
+    value = os.environ.get(var)
+    if not value:
+        raise SystemExit(f"ERROR: {var} must be set (see the installed launchd plist).")
+    return Path(value)
+
+
+INBOX = _required_path("INBOX_PATH")
 STAGED = INBOX / ".staged"
 FAILED = INBOX / "_failed"
-LIBRARY = Path(os.environ.get("LIBRARY_PATH") or (HOME / "source-library"))
+LIBRARY = _required_path("LIBRARY_PATH")
 CONFIG = HOME / ".config/claude-source-intake"
 PROMPT_FILE = CONFIG / "prompt.txt"
 PAUSED_FLAG = CONFIG / "paused"

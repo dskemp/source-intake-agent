@@ -19,8 +19,16 @@ fi
 # NB: install.sh consumes INBOX/LIBRARY and renders them into the launchd
 # plist as INBOX_PATH/LIBRARY_PATH. The asymmetry is intentional — the
 # plist exposes the "_PATH" suffix to make the runtime contract explicit.
-INBOX="${INBOX_PATH:-$HOME/source-library-inbox}"
-LIBRARY="${LIBRARY_PATH:-$HOME/source-library}"
+# No fallback defaults here: guessing a path would silently create and
+# process against a directory tree the user never configured.
+if [[ -z "${INBOX_PATH:-}" || -z "${LIBRARY_PATH:-}" ]]; then
+  echo "ERROR: INBOX_PATH and LIBRARY_PATH must be set." >&2
+  echo "launchd provides them via the installed plist; for a manual run," >&2
+  echo "export them first or set them in $ENV_FILE." >&2
+  exit 1
+fi
+INBOX="$INBOX_PATH"
+LIBRARY="$LIBRARY_PATH"
 CLAUDE="${CLAUDE_BIN:-$(command -v claude || echo $HOME/.local/bin/claude)}"
 PYTHON="$CONFIG/venv/bin/python"
 

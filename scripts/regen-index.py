@@ -11,7 +11,10 @@ from pathlib import Path
 
 import yaml
 
-LIBRARY = Path(os.environ.get("LIBRARY_PATH") or (Path.home() / "source-library"))
+_library_path = os.environ.get("LIBRARY_PATH")
+if not _library_path:
+    raise SystemExit("ERROR: LIBRARY_PATH must be set (see the installed launchd plist).")
+LIBRARY = Path(_library_path)
 
 # Optional preferred display order for categories in INDEX.md.
 # Set as comma-separated names via env: CATEGORY_ORDER="cat-a,cat-b,cat-c"
