@@ -13,6 +13,13 @@
     <array>
         <string>__INBOX__</string>
     </array>
+    <!-- Backstop for WatchPaths: launchd does not reliably re-deliver
+         directory events that arrive while the worker is already running,
+         so a file dropped mid-run can otherwise sit until the next inbox
+         disturbance. The worker exits in well under a second when the
+         inbox is empty (lock + glob), so a 5-minute sweep is cheap. -->
+    <key>StartInterval</key>
+    <integer>300</integer>
     <key>RunAtLoad</key>
     <false/>
     <key>ThrottleInterval</key>
