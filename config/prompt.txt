@@ -47,25 +47,41 @@ the year (e.g. attention-is-all-you-need-2017). The folder name and the
 file prefix must match exactly — the wrapper and dashboard rely on it.
 
 The summary's YAML frontmatter must contain ALL of these fields — the
-index generator, dedup pass, and preprint tracker parse them:
+index generator, dedup pass, preprint tracker, and a post-run validator
+parse them. The validator REJECTS the whole intake on violations, so
+follow the field rules exactly. Never write null (or ~) for any field:
+use the exact defaults shown.
 
   ---
   title: "..."
-  authors:                  # "Last, First" per entry; institutional
-    - "Last, First"         # authors get the full organization name
-  source_type: paper        # paper | article | report | preprint | post | ...
+  authors:                  # block list, "Last, First" per entry;
+    - "Last, First"         # institutional authors get the full
+                            # organization name as a single entry
+  source_type: paper        # EXACTLY one of:
+                            #   paper | documentation | article | report
+                            #   | book-chapter | opinion | book
+                            # No other values (no "preprint",
+                            # "empirical-study", "working-paper", ...).
+                            # Preprints, working papers, journal/law-review
+                            # articles, surveys, conference papers -> paper.
+                            # Blog posts and essays -> article.
+                            # Policy briefs and white papers -> report.
+                            # Bar/court/ethics opinions -> opinion.
   publication: "..."        # venue or publisher; "" if none
   date: "YYYY-MM-DD"        # publication date, best available
+                            # (YYYY or YYYY-MM if the day is unknown)
   url: "..."                # canonical source URL — REQUIRED for anything
                             # fetched from the web; dedup and preprint
                             # tracking match on it
-  retrieved: "YYYY-MM-DD"   # today
+  retrieved: "YYYY-MM-DD"   # today — never empty
   snapshot: false           # true when <slug>.snapshot.md exists
   category: "..."           # must equal the category folder name
   tldr: "..."               # one sentence (~25 words) that stands alone
   tags:
     - tag1
-  currency_check: "YYYY-MM-DD"
+  currency_check: "YYYY-MM-DD"  # the LAST date you confirmed the source
+                                # is current = today at intake. NEVER a
+                                # future review-due date.
   superseded_by: ""
   ---
 
@@ -73,6 +89,20 @@ Do NOT add a source_hash: field — the wrapper injects it after the run.
 
 Set source_type: accurately and adapt the summary's sections to it
 (e.g., omit Methodology for non-empirical sources).
+
+Authors — IMPORTANT:
+- List EVERY author, each as its own "Last, First" entry. Never write
+  "Lead et al." or truncate the list: a manifest or staging-note shortcut
+  like "Liu et al." is a HINT, not data — two library sources were once
+  misattributed to entirely wrong people this way.
+- Take the author list from the source document itself. If the document
+  gives no usable list (or you only have a shortcut), verify it via
+  WebFetch against the canonical page (arXiv abstract page, DOI landing
+  page, or publisher page) before writing the frontmatter.
+- If you cannot establish the full author list from the source or the
+  canonical page, do NOT guess and do NOT file a shortcut: print a
+  one-line explanation and exit non-zero so the wrapper quarantines the
+  input.
 
 For the Relevance section: 2-4 hedged connections to topics the existing
 library covers ("plausibly relevant to..."). If you can't infer one,
