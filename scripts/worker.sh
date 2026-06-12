@@ -444,6 +444,70 @@ with open(runs_log, "a") as f:
 PY
 }
 
+# Append a library CHANGELOG.md entry for each produced summary.
+# library/CLAUDE.md requires every intake to record what was filed, the
+# folder created, and the key finding (2–4 sentences), newest at the top
+# under a "## YYYY-MM-DD (latest)" heading. The "(latest)" marker moves to
+# the new heading; same-day intakes stack under the existing heading.
+# Non-fatal by design: a CHANGELOG hiccup must not fail a filed intake.
+append_changelog() {
+  local paths_file="$1"
+  "$PYTHON" - "$LIBRARY" "$paths_file" <<'PY'
+import datetime, re, sys
+from pathlib import Path
+import yaml
+
+library, paths_file = sys.argv[1:3]
+cl = Path(library) / "CHANGELOG.md"
+today = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
+
+entries = []
+for line in open(paths_file):
+    p = Path(line.strip())
+    if not line.strip() or not p.is_file():
+        continue
+    text = p.read_text()
+    if not text.startswith("---\n"):
+        continue
+    end = text.find("\n---\n", 4)
+    if end == -1:
+        continue
+    try:
+        fm = yaml.safe_load(text[4:end]) or {}
+    except yaml.YAMLError:
+        continue
+    title = fm.get("title") or p.name[: -len(".summary.md")]
+    authors = fm.get("authors") or []
+    if isinstance(authors, str):
+        authors = [authors]
+    surnames = [str(a).split(",")[0].strip() for a in authors if a]
+    who = f"{surnames[0]} et al." if len(surnames) > 3 else (", ".join(surnames) or "unattributed")
+    year = str(fm.get("date") or "")[:4]
+    rel = p.parent.relative_to(library)
+    tldr = str(fm.get("tldr") or "").strip().rstrip(".")
+    entries.append(f"- Filed *{title}* ({who}, {year}) into `{rel}/`. Key finding: {tldr}.")
+
+if not entries:
+    sys.exit(0)
+block = "\n".join(entries)
+
+text = cl.read_text() if cl.is_file() else "# Changelog\n"
+hdr = re.search(r"^## (.+)$", text, re.M)
+if hdr and hdr.group(1).split()[0] == today:
+    # Same-day heading exists: stack the new entries directly under it.
+    at = hdr.end()
+    text = text[:at] + "\n\n" + block + text[at:]
+else:
+    if hdr and " (latest)" in hdr.group(1):
+        text = text[:hdr.start()] + "## " + hdr.group(1).replace(" (latest)", "") + text[hdr.end():]
+    top = re.match(r"# Changelog[ \t]*\n", text)
+    at = top.end() if top else 0
+    text = text[:at] + f"\n## {today} (latest)\n\n{block}\n" + text[at:]
+cl.write_text(text)
+print(f"appended {len(entries)} CHANGELOG entr{'y' if len(entries)==1 else 'ies'}")
+PY
+}
+
 # Acquire the worker lock. Writes our PID into the lockdir so a stale lock
 # left by a killed worker can be detected and reclaimed.
 acquire_lock() {
@@ -1077,23 +1141,18 @@ print(template.replace("<STAGED_PATH>", sys.argv[2]).replace("<DOMAIN>", domain)
   find "$LIBRARY" -type f -name '*.summary.md' -newer "$sentinel" > "$produced_list" 2>/dev/null || true
   num_produced=$(wc -l < "$produced_list" | tr -d ' ')
 
+  # Ensure the original input is filed alongside the summary — as
+  # <slug>.pdf for PDF inputs, <slug>.snapshot.md for .md/.html inputs.
+  # The prompt asks the agent to file it, but agents occasionally skip
+  # that step, and the staged copy is deleted below; without this
+  # backstop the original would be lost. Belt-and-suspenders here.
+  # Only when the run produced exactly one summary, though: a digest input
+  # that yields several summaries is not the original of any one of them,
+  # and filing N copies of it would fake-satisfy the originals audit.
+  # This runs BEFORE metadata validation so the validator's snapshot-flag
+  # check sees the final artifact state.
+  validation_failed=0
   if (( claude_exit == 0 )) && (( num_produced > 0 )); then
-    log "  success (claude exit 0, $num_produced summary file(s) produced)"
-    # Promotion: the preprint's slug dir was emptied of files at detect-time.
-    # Remove it now, BEFORE relocating the produced folder — a published
-    # version that re-uses the preprint's slug would otherwise collide with
-    # the leftover empty dir and the relocation would be skipped.
-    if (( is_promotion )) && [[ -d "$promote_target_dir" ]]; then
-      rmdir "$promote_target_dir" 2>/dev/null || true
-    fi
-    # Ensure the original input is filed alongside the summary — as
-    # <slug>.pdf for PDF inputs, <slug>.snapshot.md for .md/.html inputs.
-    # The prompt asks the agent to file it, but agents occasionally skip
-    # that step, and the staged copy is deleted below; without this
-    # backstop the original would be lost. Belt-and-suspenders here.
-    # Only when the run produced exactly one summary, though: a digest input
-    # that yields several summaries is not the original of any one of them,
-    # and filing N copies of it would fake-satisfy the originals audit.
     input_hash=$(file_sha256 "$staged_path")
     is_pdf=0
     is_doc=0
@@ -1125,6 +1184,36 @@ print(template.replace("<STAGED_PATH>", sys.argv[2]).replace("<DOMAIN>", domain)
           fi
         fi
       fi
+    done < "$produced_list"
+    # Metadata gate: normalize mechanical deviations in place (null fields,
+    # synonym source_types, snapshot flag vs. file presence, missing
+    # retrieved/currency_check), then hard-validate against the template
+    # (enum membership, "Last, First" authors, no "et al." placeholders,
+    # arXiv author cross-check). A failure drops the run into the failure
+    # branch below, which quarantines the produced folders and routes the
+    # input to _failed/ — bad metadata never gets filed or indexed.
+    if "$PYTHON" "$HOME/Library/Scripts/claude-source-intake-validate.py" \
+        --paths-file "$produced_list" >>"$run_log" 2>&1; then
+      log "  metadata validation passed"
+    else
+      validation_failed=1
+      log "  metadata validation FAILED — rejecting run (details in run log)"
+    fi
+  fi
+
+  if (( claude_exit == 0 )) && (( num_produced > 0 )) && (( validation_failed == 0 )); then
+    log "  success (claude exit 0, $num_produced summary file(s) produced)"
+    # Promotion: the preprint's slug dir was emptied of files at detect-time.
+    # Remove it now, BEFORE relocating the produced folder — a published
+    # version that re-uses the preprint's slug would otherwise collide with
+    # the leftover empty dir and the relocation would be skipped.
+    if (( is_promotion )) && [[ -d "$promote_target_dir" ]]; then
+      rmdir "$promote_target_dir" 2>/dev/null || true
+    fi
+    while IFS= read -r produced_path; do
+      [[ -n "$produced_path" ]] || continue
+      folder=$(dirname "$produced_path")
+      slug=$(basename "$produced_path" .summary.md)
       # Anchor future dedup: hash the summary's own source artifact, not the
       # run's input. A multi-summary run used to stamp the single input's
       # hash onto every summary it produced, which (a) is the wrong value
@@ -1205,13 +1294,22 @@ print(template.replace("<STAGED_PATH>", sys.argv[2]).replace("<DOMAIN>", domain)
     outcome="success"
     (( is_promotion )) && outcome="promoted"
     append_run "$start_ts" "$base" "$outcome" "$produced_list" "" "$run_log"
+    if append_changelog "$produced_list" >>"$run_log" 2>&1; then
+      log "  CHANGELOG.md updated"
+    else
+      log "  CHANGELOG.md update failed (non-fatal)"
+    fi
     if "$PYTHON" "$HOME/Library/Scripts/claude-source-intake-regen-index.py" 2>&1; then
       log "  INDEX.md regenerated"
     else
       log "  INDEX.md regen failed (non-fatal)"
     fi
   else
-    log "  failure (claude exit $claude_exit, $num_produced summary file(s) produced)"
+    if (( validation_failed )); then
+      log "  rejected (metadata validation failed; $num_produced summary file(s) quarantined)"
+    else
+      log "  failure (claude exit $claude_exit, $num_produced summary file(s) produced)"
+    fi
     # Quarantine partial output: claude may have written summaries before the
     # run failed (e.g. watchdog timeout). Left in the library they'd be
     # unindexed, carry no source_hash, and their url: could dedup-block a
@@ -1221,6 +1319,7 @@ print(template.replace("<STAGED_PATH>", sys.argv[2]).replace("<DOMAIN>", domain)
     if (( num_produced > 0 )); then
       sentinel_ts=$(stat -f %m "$sentinel" 2>/dev/null || echo 0)
       partial_root="$INBOX/_failed/_partial"
+      (( validation_failed )) && partial_root="$INBOX/_failed/_rejected"
       while IFS= read -r produced_path; do
         [[ -n "$produced_path" ]] || continue
         pfolder=$(dirname "$produced_path")
@@ -1238,6 +1337,10 @@ print(template.replace("<STAGED_PATH>", sys.argv[2]).replace("<DOMAIN>", domain)
             log "  quarantined partial output: $pfolder -> $pdest"
             new_produced_path="$pdest/$(basename "$produced_path")"
             sed -i.bak "s|^${produced_path}$|${new_produced_path}|" "$produced_list" 2>/dev/null && rm -f "${produced_list}.bak"
+            # Drop the category dir too if the quarantine emptied it — a
+            # category created by this run shouldn't linger as an empty
+            # shell in the library. rmdir is a no-op when non-empty.
+            rmdir "$(dirname "$pfolder")" 2>/dev/null || true
           fi
         else
           log "  NOTE: $produced_path changed during the failed run but its folder predates it; leaving in place"
@@ -1276,7 +1379,9 @@ print(template.replace("<STAGED_PATH>", sys.argv[2]).replace("<DOMAIN>", domain)
     done
     mv "$staged_path" "$fail_dest"
     cp "$run_log" "${fail_dest}.log"
-    append_run "$start_ts" "$base" "failure" "$produced_list" "$run_log" "$run_log"
+    fail_outcome="failure"
+    (( validation_failed )) && fail_outcome="rejected-metadata"
+    append_run "$start_ts" "$base" "$fail_outcome" "$produced_list" "$run_log" "$run_log"
   fi
 
   # Archive this iteration's run log under a unique name so a multi-file

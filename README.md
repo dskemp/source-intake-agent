@@ -90,6 +90,8 @@ you're set.
 $INBOX/                                ← drop files here
   ├── .staged/                         (worker-managed working copies)
   └── _failed/                         (quarantined inputs + .log sidecars)
+      ├── _partial/                    (summary folders from crashed/failed runs)
+      └── _rejected/                   (summary folders that failed metadata validation)
 
 ~/.config/claude-source-intake/
   ├── env                              (your ANTHROPIC_API_KEY, mode 0600)
@@ -127,16 +129,31 @@ $INBOX/                                ← drop files here
 4. Invoke `claude -p "<autonomy prompt>" --model claude-sonnet-4-6
    --permission-mode acceptEdits --output-format stream-json --verbose`,
    redirecting output to `current-run.log` so the dashboard can tail it live.
-5. On success (claude exit 0 + a new `*.summary.md` appears under a category
-   folder): inject `source_hash: "<sha256>"` into each new summary's
-   frontmatter (hashing that summary's own filed `.pdf`/`.snapshot.md`, not
-   the run's input — a digest input can produce several summaries), delete
-   the staged file, regenerate `INDEX.md`, append a JSONL entry with cost +
-   duration to `runs.jsonl`.
-6. On failure: move the staged file to `_failed/` with its log next to it.
+5. On claude exit 0 + new `*.summary.md` file(s): run `validate.py`, a
+   normalize-then-validate metadata gate. It first normalizes mechanical
+   deviations in place (`null` fields → template defaults, `source_type`
+   synonyms → the template enum, `snapshot` flag set to the actual presence
+   of a `.snapshot.md`, missing `retrieved`/`currency_check` → intake date),
+   then hard-validates: enum membership, date formats, category field vs.
+   folder, authors as a `"Last, First"` block list with no `"X et al."`
+   placeholder entries, and — for arXiv URLs — a live author cross-check
+   against the arXiv API (skipped with a warning if the fetch fails, so an
+   arXiv outage never blocks intake).
+6. On success (validation passed): inject `source_hash: "<sha256>"` into
+   each new summary's frontmatter (hashing that summary's own filed
+   `.pdf`/`.snapshot.md`, not the run's input — a digest input can produce
+   several summaries), delete the staged file, append a dated entry per
+   source to the library's `CHANGELOG.md` (newest at top under a
+   `## YYYY-MM-DD (latest)` heading), regenerate `INDEX.md`, append a JSONL
+   entry with cost + duration to `runs.jsonl`.
+7. On failure: move the staged file to `_failed/` with its log next to it.
    Any summary folders the failed run already created are quarantined to
    `_failed/_partial/` so a half-written summary can't dedup-block a retry.
-7. If the worker is killed mid-run (reboot, force-quit), the next tick
+   Validation failures behave the same but quarantine to `_failed/_rejected/`
+   and log `outcome: "rejected-metadata"` to `runs.jsonl`, with the
+   validator's findings in the entry's error excerpt — bad metadata never
+   reaches the library or `INDEX.md`.
+8. If the worker is killed mid-run (reboot, force-quit), the next tick
    recovers the staged input back to the inbox automatically.
 
 ## Prerequisites
