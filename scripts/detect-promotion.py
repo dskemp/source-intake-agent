@@ -137,7 +137,21 @@ def _looks_like_junk_title(s: str) -> bool:
         return True
     low = s.lower()
     junk_markers = ("untitled", "microsoft word", "untitled document", ".dvi", ".tex", "preprint.pdf")
-    return any(m in low for m in junk_markers)
+    if any(m in low for m in junk_markers):
+        return True
+    # Conference/journal front matter that PDFs frequently render as the first
+    # line(s) of page 1, ahead of the actual paper title (ACL Anthology et al.).
+    # Without this the title fallback grabs the proceedings banner instead of the
+    # title and the similarity match never clears the threshold.
+    if "©" in s or "(c)" in low:
+        return True  # copyright / dateline line, e.g. "... ©2024 Association ..."
+    if low.startswith(("proceedings of", "findings of the", "in proceedings")):
+        return True
+    if "annual meeting of the association" in low or "conference on empirical methods" in low:
+        return True
+    if re.match(r"^pages?\s+\d", low) or re.match(r"^vol(\.|ume)\s", low):
+        return True
+    return False
 
 
 def normalize_title(s: str) -> str:
