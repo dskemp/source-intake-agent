@@ -60,6 +60,14 @@ USER_AGENT = "source-intake-agent (preprint-checker; +https://github.com/dskemp/
 # many preprints doesn't tank our reputation in the shared pool.
 RATE_LIMIT_SLEEP = float(os.environ.get("PREPRINT_RATE_LIMIT_SLEEP", "0.4"))
 
+# OpenAlex is intermittently slow or briefly unavailable. A single hiccup used
+# to mark a preprint as a hard "error" for the whole week, so retry transient
+# failures (read timeouts, connection errors, 429, 5xx) with exponential
+# backoff and allow a generous read timeout for the slow-but-working case.
+HTTP_TIMEOUT = float(os.environ.get("PREPRINT_HTTP_TIMEOUT", "30"))
+RETRY_ATTEMPTS = max(1, int(os.environ.get("PREPRINT_RETRY_ATTEMPTS", "3")))
+RETRY_BACKOFF = float(os.environ.get("PREPRINT_RETRY_BACKOFF", "1.5"))
+
 # arXiv accepts both new ("2310.06825") and old ("math.AG/0506203") id formats.
 # The pdf/abs path is identical for both; we strip a trailing version (`v2`)
 # before turning the id into the DOI 10.48550/arXiv.<id>.
@@ -143,10 +151,27 @@ def title_similarity(a: str, b: str) -> float:
     return SequenceMatcher(None, normalize_title(a), normalize_title(b)).ratio()
 
 
+# OpenAlex's search= parser treats * and ? as wildcards and | as an OR operator,
+# returning HTTP 400 for any title containing them — and titles ending in "?"
+# are common ("How Good Are GPT Models at Machine Translation?"). Strip these so
+# such preprints get searched instead of failing every run; the search is
+# fuzzy/stemmed, so dropping the punctuation costs nothing.
+_SEARCH_SPECIAL_RE = re.compile(r"[?*|]+")
+
+
+def sanitize_search(title: str) -> str:
+    return " ".join(_SEARCH_SPECIAL_RE.sub(" ", title or "").split())
+
+
 def openalex_get(path: str, params: dict | None = None) -> dict | None:
     """GET an OpenAlex endpoint. Returns parsed JSON or None on 404.
 
-    Raises on other HTTP errors so the caller can record a transient failure.
+    Retries transient failures (read timeouts, connection errors, HTTP 429,
+    HTTP 5xx) with exponential backoff — OpenAlex is intermittently slow, and a
+    single hiccup should not fail a preprint for a whole week. Re-raises on
+    non-transient HTTP errors (e.g. 400 from a malformed query) so the caller
+    records the failure immediately instead of burning retries on a request that
+    can't succeed.
     """
     p = dict(params or {})
     if OPENALEX_EMAIL and "mailto" not in p:
@@ -155,13 +180,29 @@ def openalex_get(path: str, params: dict | None = None) -> dict | None:
     if p:
         url += "?" + urllib.parse.urlencode(p)
     req = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": USER_AGENT})
-    try:
-        with urllib.request.urlopen(req, timeout=20) as r:
-            return json.loads(r.read())
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
-            return None
-        raise
+    last_exc: Exception | None = None
+    for attempt in range(RETRY_ATTEMPTS):
+        try:
+            with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as r:
+                return json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return None
+            # 429 (rate-limited) and 5xx (server) are worth retrying; other 4xx
+            # (e.g. 400 from a malformed query) are deterministic — re-raise now.
+            if e.code != 429 and not 500 <= e.code < 600:
+                raise
+            last_exc = e
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as e:
+            # URLError: DNS/connection failures. TimeoutError: read timeouts
+            # (socket.timeout is an alias since 3.10). JSONDecodeError: a body
+            # truncated mid-read when the server stalls. All transient.
+            last_exc = e
+        if attempt + 1 < RETRY_ATTEMPTS:
+            time.sleep(RETRY_BACKOFF * (2 ** attempt))
+    # Retries exhausted — re-raise the last transient error for the caller.
+    assert last_exc is not None
+    raise last_exc
 
 
 _DOI_RE = re.compile(r"\b10\.\d{4,9}/[^\s\"'<>)\],]+", re.IGNORECASE)
@@ -282,7 +323,7 @@ def check_by_title(
     if not title:
         return {"status": "unknown", "note": "no title to search"}
     try:
-        result = openalex_get("/works", {"search": title, "per-page": "10"})
+        result = openalex_get("/works", {"search": sanitize_search(title), "per-page": "10"})
     except (urllib.error.URLError, json.JSONDecodeError, TimeoutError) as e:
         return {"status": "error", "error": f"openalex search failed: {e}"}
     if not result or not result.get("results"):
@@ -425,7 +466,11 @@ def run(force: bool = False, only_rel: str | None = None) -> dict:
         rel = p["rel_path"]
         cache_rel_paths.add(rel)
         prior = cache.get(rel) or {}
-        if not force and not only_rel and is_fresh(prior, REFRESH_DAYS):
+        # A prior "error" is a transient failure (timeout / 429 / 5xx), not a
+        # real result — don't let it sit fresh for the whole refresh window.
+        # Retry it on the next run so a brief OpenAlex outage self-heals.
+        prior_ok = prior.get("status") != "error"
+        if not force and not only_rel and prior_ok and is_fresh(prior, REFRESH_DAYS):
             skipped += 1
             # Refresh the display fields in case they changed in the summary.
             prior.update({
