@@ -243,6 +243,26 @@ def match_by_title(input_title: str, candidates: list[tuple[str, dict]]) -> str 
     return None
 
 
+# A DOI-based promotion overwrites a tracked preprint with the incoming PDF and
+# archives the original, so it is only safe when the PDF really is the published
+# version of THAT preprint — the same paper — whose title should resemble the
+# preprint's. A shared journal DOI alone can be wrong if the preprint cache was
+# poisoned upstream (e.g. OpenAlex conflating two papers with the same title
+# stem). This is the last gate before a destructive swap. When no title can be
+# read from the PDF, don't block — the DOI match stands on its own.
+PROMOTION_TITLE_FLOOR = 0.70
+
+
+def title_corroborates_preprint(pdf_title: str, entry: dict) -> bool:
+    norm = normalize_title(pdf_title)
+    if len(norm) < 12:
+        return True
+    preprint_title = normalize_title(entry.get("title") or "")
+    if not preprint_title:
+        return True
+    return SequenceMatcher(None, norm, preprint_title).ratio() >= PROMOTION_TITLE_FLOOR
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         print("usage: detect-promotion.py <pdf-path>", file=sys.stderr)
@@ -254,11 +274,25 @@ def main() -> int:
     candidates = published_entries(cache)
     if not candidates:
         return 0
+    by_rel = dict(candidates)
+    pdf_title = extract_title_from_pdf(pdf_path)
     doi = extract_doi_from_pdf(pdf_path)
     rel = match_by_doi(doi, candidates)
     if not rel:
-        title = extract_title_from_pdf(pdf_path)
-        rel = match_by_title(title, candidates)
+        rel = match_by_title(pdf_title, candidates)
+    # Final gate before a destructive swap, applied however `rel` was matched:
+    # the published PDF must be the same paper as the preprint it would
+    # overwrite. Both the DOI route and the title route key off cache fields
+    # (`published_doi`, `published_title`) that an upstream metadata mix-up can
+    # poison with a *different* paper, so corroborate against the preprint's own
+    # title — the value taken straight from the user's summary.
+    if rel and not title_corroborates_preprint(pdf_title, by_rel[rel]):
+        print(
+            f"refusing promotion to {rel}: PDF title {pdf_title!r} does not "
+            f"resemble the tracked preprint title {by_rel[rel].get('title')!r}",
+            file=sys.stderr,
+        )
+        rel = None
     if rel:
         print(f"PROMOTE:{rel}")
     return 0
