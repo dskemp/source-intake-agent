@@ -307,6 +307,16 @@ def _hit_arxiv_id(hit: dict) -> str | None:
     return None
 
 
+def _hit_surnames(hit: dict) -> set[str]:
+    """Author surnames OpenAlex lists for a work (lowercased)."""
+    out = set()
+    for a in hit.get("authorships") or []:
+        name = ((a.get("author") or {}).get("display_name") or "").strip()
+        if name:
+            out.add(name.split()[-1].lower())
+    return out
+
+
 def check_by_title(
     title: str,
     authors: Iterable[str],
@@ -315,8 +325,9 @@ def check_by_title(
     """Search OpenAlex by title; require an author surname match to accept.
 
     When `expected_arxiv_id` is set, a hit whose own locations include the same
-    arXiv id is treated as high-confidence regardless of title similarity (the
-    arXiv id is a definitive identifier). Otherwise we require ≥0.85 title
+    arXiv id is fast-tracked — but only when it also clears a sanity-level title
+    overlap (≥0.7) and shares an author surname, since OpenAlex sometimes
+    attaches an arXiv id to the wrong work. Otherwise we require ≥0.85 title
     similarity and ≥1 shared author surname — conservative, biased toward false
     negatives over false positives.
     """
@@ -336,23 +347,31 @@ def check_by_title(
     best_score = 0.0
     matched_by_arxiv_id = False
     for hit in result["results"]:
-        # Fast path: matching arXiv id is a strong identifier, BUT OpenAlex
-        # occasionally conflates unrelated papers into one record (locations[]
-        # ends up with arXiv ids it shouldn't). Require at least a sanity-check
-        # title overlap to avoid being fooled by those polluted records.
+        hit_title = hit.get("title") or hit.get("display_name") or ""
+        hit_surnames = _hit_surnames(hit)
+        # When both author lists are known, a genuine match shares ≥1 surname.
+        # Treat as corroborated when we can't compute it (no preprint authors
+        # recorded, or OpenAlex returned no authorships for the hit).
+        authors_corroborate = (
+            not (surnames and hit_surnames) or bool(surnames & hit_surnames)
+        )
+        # Fast path: a matching arXiv id is a strong identifier, BUT OpenAlex
+        # occasionally conflates distinct papers into one record — attaching an
+        # arXiv id the work doesn't actually own (e.g. a later paper built on an
+        # earlier one's benchmark). A shared arXiv id is therefore necessary but
+        # not sufficient: also require a sanity-level title overlap AND author
+        # corroboration before trusting it. The "Abductive Commonsense
+        # Reasoning" preprint vs the later "Abductive Commonsense Reasoning:
+        # Exploiting Mutually Exclusive Explanations" paper (different authors)
+        # clear neither bar, so this rejects that false positive.
         if expected_arxiv_id and _hit_arxiv_id(hit) == expected_arxiv_id:
-            sanity = title_similarity(title, hit.get("title") or hit.get("display_name") or "")
-            if sanity >= 0.6:
+            sanity = title_similarity(title, hit_title)
+            if sanity >= 0.7 and authors_corroborate:
                 best, best_score, matched_by_arxiv_id = hit, max(sanity, 0.95), True
                 break
-        score = title_similarity(title, hit.get("title") or hit.get("display_name") or "")
+        score = title_similarity(title, hit_title)
         if score < 0.85:
             continue
-        hit_surnames = set()
-        for a in hit.get("authorships") or []:
-            name = ((a.get("author") or {}).get("display_name") or "").strip()
-            if name:
-                hit_surnames.add(name.split()[-1].lower())
         if surnames and not (surnames & hit_surnames):
             continue
         if score > best_score:
