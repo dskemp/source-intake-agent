@@ -6,6 +6,7 @@ request layer as defense-in-depth against browser CSRF (see
 `block_cross_origin_post` below).
 """
 import calendar
+import datetime
 import json
 import logging
 import os
@@ -416,6 +417,37 @@ def regen_index_now(timeout: int = 30) -> tuple[bool, str]:
     if r.returncode != 0:
         return False, (r.stderr or r.stdout or "regen-index returned non-zero").strip()
     return True, (r.stdout or "INDEX.md regenerated").strip()
+
+
+def append_changelog_deletion(category: str, slug: str, title: str) -> tuple[bool, str]:
+    """Record a source removal in the library CHANGELOG.
+
+    Mirrors the worker's append_changelog() convention: newest entry first,
+    under a "## YYYY-MM-DD (latest)" heading whose "(latest)" marker moves to a
+    fresh heading when the day rolls over, while same-day removals stack under
+    the existing one. Non-fatal — a CHANGELOG hiccup must never fail a delete,
+    so this returns (ok, message) instead of raising.
+    """
+    try:
+        cl = LIBRARY / "CHANGELOG.md"
+        today = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
+        name = f"*{title.strip()}*" if title and title.strip() else f"`{category}/{slug}`"
+        entry = f"- Removed {name} from `{category}/{slug}/`. Deleted via the dashboard."
+        text = cl.read_text() if cl.is_file() else "# Changelog\n"
+        hdr = re.search(r"^## (.+)$", text, re.M)
+        if hdr and hdr.group(1).split()[0] == today:
+            at = hdr.end()
+            text = text[:at] + "\n\n" + entry + text[at:]
+        else:
+            if hdr and " (latest)" in hdr.group(1):
+                text = text[:hdr.start()] + "## " + hdr.group(1).replace(" (latest)", "") + text[hdr.end():]
+            top = re.match(r"# Changelog[ \t]*\n", text)
+            at = top.end() if top else 0
+            text = text[:at] + f"\n## {today} (latest)\n\n{entry}\n" + text[at:]
+        cl.write_text(text)
+        return True, ""
+    except Exception as e:  # noqa: BLE001 — runs post-delete; never fail the request
+        return False, str(e)
 
 
 # Heuristics for distinguishing institutional authors (e.g. "U.S. Government
@@ -2033,11 +2065,17 @@ def delete_source():
         abort(400, "category is private")
     if not slug or slug.startswith(".") or slug.startswith("_"):
         abort(400, "invalid slug")
+    # Capture the title before the folder is gone, so the CHANGELOG entry can
+    # name the source rather than just its slug.
+    title = str((parse_frontmatter(target) or {}).get("title") or "").strip()
     shutil.rmtree(folder)
     ok, msg = regen_index_now()
+    cl_ok, cl_msg = append_changelog_deletion(category, slug, title)
     flash = f"Deleted {category}/{slug}"
     if not ok:
         flash += f" (warning: index regen failed — {msg})"
+    if not cl_ok:
+        flash += f" (warning: CHANGELOG update failed — {cl_msg})"
     return redirect("/library?flash=" + flash.replace("&", "and").replace("#", "").replace(" ", "+"))
 
 
