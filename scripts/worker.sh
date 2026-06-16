@@ -603,7 +603,6 @@ for stale in "$INBOX/.staged"/*; do
   fi
 done
 
-NOW=$(date +%s)
 processed_any=0
 
 # Drain loop: the for-glob below is expanded once per pass, so a file dropped
@@ -651,7 +650,6 @@ for path in "$INBOX"/*; do
   is_promotion=0
   promote_target_dir=""
   promote_category_dir=""
-  promote_preprint_rel=""
   promote_published_url=""
   promote_preprint_url=""
 
@@ -1104,7 +1102,6 @@ PY
       # rather than into the preprint's own slug dir. promote_target_dir is
       # retained for the failure-restore path below.
       promote_category_dir="$(dirname "$preprint_dir")"
-      promote_preprint_rel="$preprint_rel"
       # Fall through to normal intake below — do NOT `continue`.
     else
       log "duplicate '$base' (matched by $matched_reason): $matched_path"
