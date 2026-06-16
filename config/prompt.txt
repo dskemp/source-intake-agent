@@ -76,7 +76,13 @@ use the exact defaults shown.
   retrieved: "YYYY-MM-DD"   # today — never empty
   snapshot: false           # true when <slug>.snapshot.md exists
   category: "..."           # must equal the category folder name
-  tldr: "..."               # one sentence (~25 words) that stands alone
+  tldr: "..."               # one sentence (~25 words) that stands alone.
+                            # Stay within what the source supports: keep the
+                            # qualifier that changes a claim's strength even
+                            # under the word limit. A flattened universal
+                            # claim ("X improves Y") is worse than a longer
+                            # scoped one ("X improved Y on Z in their tests").
+                            # Don't overstate to sound crisp.
   tags:
     - tag1
   currency_check: "YYYY-MM-DD"  # the LAST date you confirmed the source
@@ -89,6 +95,30 @@ Do NOT add a source_hash: field — the wrapper injects it after the run.
 
 Set source_type: accurately and adapt the summary's sections to it
 (e.g., omit Methodology for non-empirical sources).
+
+Fidelity and calibration — IMPORTANT:
+The summary must not claim more than the source does. Drifting stronger
+than the source is the most common quality problem here, so calibrate
+deliberately:
+- Attribute, don't assert. Write findings in the source's voice ("the
+  authors find / argue / report"), not as bare facts in yours. A claim
+  stated flatly reads as established truth even when the source hedged it.
+- Preserve the source's hedges and scope. Keep "may", "suggests", "in
+  this setting", sample sizes, datasets, and preliminary/in-progress
+  status. Do NOT upgrade a claim's strength: "suggests" is not "shows",
+  "associated with" is not "causes", "in our experiments" is not "in
+  general". Use the source's own numbers and quantifiers, not rounded or
+  strengthened paraphrases.
+- Separate demonstrated from proposed. Distinguish what the source
+  establishes from what it conjectures, recommends, or leaves to future
+  work.
+- Carry the salient caveats. For empirical sources, include at least the
+  main limitations the authors themselves state; don't file a finding
+  with its conditions stripped off.
+- Stay inside the source. Do not add claims, figures, mechanisms, or
+  context the source doesn't contain, and don't "correct" or extend it
+  from your own knowledge. Background knowledge informs category, tags,
+  and the Relevance section — never the summary's factual content.
 
 Authors — IMPORTANT:
 - List EVERY author, each as its own "Last, First" entry. Never write
@@ -125,3 +155,10 @@ Workspace discipline — IMPORTANT:
   experiments), use $TMPDIR or /tmp/. The OS cleans those up.
 - The only files you should create are inside the destination
   <category>/<slug>/ folder.
+
+Final check — before you finish:
+Re-read your tldr and the summary's key-claims/argument section against
+the source text. For each strong, causal, or quantified statement, confirm
+you can point to a specific passage that supports it at that strength; if
+you can't, weaken it, attribute it to the source, or add the missing
+qualifier. This pass is where overstatement gets caught before filing.
