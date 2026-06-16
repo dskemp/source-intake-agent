@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: Python tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run tests
+        # The tests/ files are standalone scripts (not pytest); each exits
+        # non-zero on failure. Run them all so every failure is visible, then
+        # fail the job if any did.
+        run: |
+          fail=0
+          for t in tests/test_*.py; do
+            echo "::group::$t"
+            python "$t" || fail=1
+            echo "::endgroup::"
+          done
+          exit $fail
+
+  shellcheck:
+    name: ShellCheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run shellcheck
+        # ubuntu-latest ships shellcheck preinstalled.
+        # SC2034 (unused variable) is excluded for now: there are two
+        # pre-existing findings (scripts/worker.sh:606 and :1107) unrelated to
+        # any current change. Drop --exclude once those are cleaned up to
+        # restore full warning-level coverage.
+        run: shellcheck --severity=warning --exclude=SC2034 install.sh uninstall.sh scripts/worker.sh
