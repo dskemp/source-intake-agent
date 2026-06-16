@@ -39,8 +39,4 @@ jobs:
       - uses: actions/checkout@v4
       - name: Run shellcheck
         # ubuntu-latest ships shellcheck preinstalled.
-        # SC2034 (unused variable) is excluded for now: there are two
-        # pre-existing findings (scripts/worker.sh:606 and :1107) unrelated to
-        # any current change. Drop --exclude once those are cleaned up to
-        # restore full warning-level coverage.
-        run: shellcheck --severity=warning --exclude=SC2034 install.sh uninstall.sh scripts/worker.sh
+        run: shellcheck --severity=warning install.sh uninstall.sh scripts/worker.sh
