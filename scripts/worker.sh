@@ -665,6 +665,136 @@ for path in "$INBOX"/*; do
   # re-scan would also pick it up next pass, but the swap keeps note and
   # source in one iteration so the run log reads as a single job.
   if [[ "$base" == *.[Mm][Dd] ]]; then
+    # Multi-source manifest first: a candidate-for-intake note whose frontmatter
+    # carries a `sources:` LIST requests several documents in one drop. Fetch
+    # each into the inbox (the drain loop intakes them on later passes) and
+    # archive the note to _notes/ — like the single-URL case, filing the note
+    # itself as a snapshot would block backfill of the real documents. Deployed
+    # alongside this script as claude-source-intake-candidate-manifest.py; in the
+    # repo it's scripts/candidate-manifest.py. Try both.
+    manifest_helper=""
+    for cand in \
+      "$(dirname "$0")/claude-source-intake-candidate-manifest.py" \
+      "$(dirname "$0")/candidate-manifest.py"; do
+      [[ -f "$cand" ]] && { manifest_helper="$cand"; break; }
+    done
+    manifest_out=""
+    if [[ -n "$manifest_helper" ]]; then
+      manifest_out=$("$PYTHON" "$manifest_helper" "$path" 2>/dev/null || true)
+    fi
+    if [[ -n "$manifest_out" ]]; then
+      if [[ "$manifest_out" == "NONE" ]]; then
+        log "manifest note '$base' lists no fetchable sources; routing to _failed/"
+        fail_dest="$INBOX/_failed/$base"
+        n=1
+        while [[ -e "$fail_dest" ]]; do
+          fail_dest="$INBOX/_failed/${base%.*}.${n}.${base##*.}"
+          n=$((n+1))
+        done
+        mv "$path" "$fail_dest"
+        pass_claimed=1
+        cat > "${fail_dest}.log" <<EOF
+Manifest candidate note: its sources: list has no fetchable pdf_url/url.
+Detected: $(date -u '+%Y-%m-%dT%H:%M:%SZ')
+
+Each sources[] entry needs an http(s) pdf_url (preferred) or url. Fix the
+frontmatter and move this note back to the inbox, or download the documents
+manually and drop those in instead.
+EOF
+        cand_err_file=$(mktemp -t intake-cand-err)
+        cand_paths_file=$(mktemp -t intake-cand-paths)
+        printf 'manifest note has no fetchable sources\n' > "$cand_err_file"
+        append_run "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$base" "failure" "$cand_paths_file" "$cand_err_file" ""
+        rm -f "$cand_err_file" "$cand_paths_file"
+        continue
+      fi
+      log "candidate manifest '$base'; fetching listed sources"
+      cand_paths_file=$(mktemp -t intake-cand-paths)
+      cand_fail_file=$(mktemp -t intake-cand-fail)
+      manifest_targets_file=$(mktemp -t intake-manifest)
+      printf '%s\n' "$manifest_out" > "$manifest_targets_file"
+      fetched_n=0
+      failed_n=0
+      # Read targets from a file (not a pipe) so this loop runs in the current
+      # shell and the counters below survive it.
+      while IFS=$'\t' read -r m_slug m_url; do
+        [[ -n "$m_url" ]] || continue
+        fetch_tmp=$(mktemp -t intake-fetch)
+        if curl -fsSL --max-time 300 --retry 2 -o "$fetch_tmp" "$m_url"; then
+          if [[ "$(head -c 4 "$fetch_tmp" 2>/dev/null)" == "%PDF" ]]; then
+            m_ext="pdf"
+          else
+            m_ext="html"
+          fi
+          fetch_dest="$INBOX/${m_slug}.${m_ext}"
+          n=1
+          while [[ -e "$fetch_dest" ]]; do
+            fetch_dest="$INBOX/${m_slug}.${n}.${m_ext}"
+            n=$((n+1))
+          done
+          if mv "$fetch_tmp" "$fetch_dest"; then
+            printf '%s\n' "$fetch_dest" >> "$cand_paths_file"
+            fetched_n=$((fetched_n+1))
+            log "  fetched '$m_slug' -> $(basename "$fetch_dest")"
+          else
+            rm -f "$fetch_tmp"
+            printf '%s\t%s\tcould not move into inbox\n' "$m_slug" "$m_url" >> "$cand_fail_file"
+            failed_n=$((failed_n+1))
+          fi
+        else
+          rm -f "$fetch_tmp"
+          printf '%s\t%s\tfetch failed\n' "$m_slug" "$m_url" >> "$cand_fail_file"
+          failed_n=$((failed_n+1))
+          log "  fetch failed for '$m_slug' ($m_url); writing a retry stub to _failed/"
+          stub="$INBOX/_failed/${m_slug}.candidate.md"
+          n=1
+          while [[ -e "$stub" ]]; do
+            stub="$INBOX/_failed/${m_slug}.${n}.candidate.md"
+            n=$((n+1))
+          done
+          printf -- '---\nstatus: candidate-for-intake\npdf_url: %s\n---\n' "$m_url" > "$stub"
+          cat > "${stub}.log" <<EOF
+Manifest entry fetch failed for slug "$m_slug".
+URL: $m_url
+From manifest: $base
+Detected: $(date -u '+%Y-%m-%dT%H:%M:%SZ')
+
+Move this stub back into the inbox to retry just this source, or download
+the document manually and drop that in instead.
+EOF
+        fi
+      done < "$manifest_targets_file"
+      rm -f "$manifest_targets_file"
+      # Archive the manifest note (an intake request, not source content).
+      note_dest="$INBOX/_notes/$base"
+      n=1
+      while [[ -e "$note_dest" ]]; do
+        note_dest="$INBOX/_notes/${base%.*}.${n}.${base##*.}"
+        n=$((n+1))
+      done
+      if mv "$path" "$note_dest" 2>/dev/null; then
+        cat > "${note_dest}.log" <<EOF
+Manifest candidate processed.
+Fetched $fetched_n source(s) into the inbox; $failed_n failed.
+Detected: $(date -u '+%Y-%m-%dT%H:%M:%SZ')
+EOF
+      else
+        log "  WARNING: could not archive manifest '$base' to _notes/; removing it"
+        rm -f "$path" 2>/dev/null || true
+      fi
+      pass_claimed=1
+      if (( fetched_n > 0 )); then
+        manifest_outcome="candidate-fetched"
+      else
+        manifest_outcome="failure"
+      fi
+      append_run "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$base" "$manifest_outcome" "$cand_paths_file" "$cand_fail_file" ""
+      rm -f "$cand_paths_file" "$cand_fail_file"
+      log "  manifest '$base': $fetched_n fetched, $failed_n failed; drain loop will intake them"
+      continue
+    fi
+
+    # Single-source candidate note: frontmatter scalar pdf_url/url (below).
     cand_url=$(candidate_note_url "$path" || true)
     if [[ "$cand_url" == "NONE" ]]; then
       log "candidate note '$base' has no fetchable pdf_url/url; routing to _failed/"
