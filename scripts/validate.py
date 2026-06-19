@@ -53,7 +53,8 @@ SOURCE_TYPE_MAP = {
 ORG_MARKERS = re.compile(
     r"(Association|Council|Committee|Commission|Bureau|Office|Institute|Institution|"
     r"University|Center|Centre|Project|Group|Foundation|Laborator|Society|Agency|"
-    r"Department|Ministry|Bar of|State Bar|Corporation|Inc\.|LLC|Ltd|GmbH|"
+    r"Department|Ministry|Parliament|Senate|Assembly|Board|Authority|Union|Tribunal|"
+    r"Court|Directorate|Bar of|State Bar|Corporation|Inc\.|LLC|Ltd|GmbH|"
     r"OWASP|Anthropic|OpenAI|LexisNexis|NIST|GAO|\bABA\b|\(.*\))", re.I)
 
 DATE_FULL = re.compile(r"^\d{4}-\d{2}-\d{2}$")

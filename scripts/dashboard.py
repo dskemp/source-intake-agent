@@ -456,7 +456,7 @@ def append_changelog_deletion(category: str, slug: str, title: str) -> tuple[boo
 _ORG_KEYWORDS = re.compile(
     r"\b("
     r"Office|Agency|Bureau|Committee|Commission|Council|Board|Authority|"
-    r"Department|Ministry|Administration|"
+    r"Department|Ministry|Administration|Parliament|Senate|Assembly|Directorate|"
     r"Association|Foundation|Society|Federation|Alliance|Coalition|Union|Trust|"
     r"Institute|Institution|Center|Centre|Forum|Initiative|Programme|"
     r"University|College|Law School|"
