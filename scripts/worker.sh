@@ -50,6 +50,14 @@ RUN_LOG_KEEP="${RUN_LOG_KEEP:-50}"               # number of per-iteration archi
 # published PDF into its category slot. stage = route the PDF to
 # _promoted/_pending/ for manual review. off = skip detection entirely.
 PREPRINT_PROMOTION_MODE="${PREPRINT_PROMOTION_MODE:-auto}"
+# Fetching candidate sources. Many hosts (CourtListener, americanbar.org, and
+# other WAF-fronted sites) 403 the bare "curl/x.y" User-Agent but serve a
+# normal 200 to a browser UA, so we send one by default. FETCH_MIN_BYTES is the
+# smallest body we accept as a real document: a curl that "succeeds" with HTTP
+# 2xx but an empty/near-empty body (e.g. EUR-Lex answering an async request with
+# HTTP 202 + 0 bytes) must be treated as a fetch failure, not filed as content.
+FETCH_USER_AGENT="${FETCH_USER_AGENT:-Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36}"
+FETCH_MIN_BYTES="${FETCH_MIN_BYTES:-1}"          # reject empty bodies; bump to e.g. 512 to also drop tiny challenge pages
 
 mkdir -p "$INBOX/.staged" "$INBOX/_failed" "$INBOX/_duplicate" "$INBOX/_promoted" "$INBOX/_notes" "$CONFIG" "$RUN_LOGS_DIR"
 
@@ -60,6 +68,30 @@ if [[ ! -f "$PROMPT_FILE" ]]; then
 fi
 
 log() { echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*"; }
+
+# fetch_url <url> <dest>: download <url> into <dest>. Returns 0 only when curl
+# succeeded AND the body is a plausibly-real document. Returns non-zero on a
+# transport/HTTP error (curl -f already fails on >=400) OR on an empty/too-small
+# body. The size guard is the important half: curl -f treats any 2xx — including
+# HTTP 202 "Accepted, come back later" (EUR-Lex's async delivery) — as success,
+# so without it a 0-byte download was filed as "fetched" and then poisoned the
+# drain loop (the intake agent correctly refuses an empty file, wasting a run).
+# A browser User-Agent is sent so WAF-fronted hosts that 403 the bare curl UA
+# (CourtListener, americanbar.org) serve their normal 200. Both behaviors are
+# tunable via FETCH_USER_AGENT / FETCH_MIN_BYTES.
+fetch_url() {
+  local url="$1" out="$2" size
+  curl -fsSL --max-time 300 --retry 2 \
+    -A "$FETCH_USER_AGENT" \
+    -H 'Accept: text/html,application/xhtml+xml,application/pdf,*/*;q=0.8' \
+    -o "$out" "$url" || return 1
+  size=$(stat -f %z "$out" 2>/dev/null || echo 0)
+  if (( size < FETCH_MIN_BYTES )); then
+    log "  fetch returned an empty/too-small body (${size}B < ${FETCH_MIN_BYTES}B): $url"
+    return 2
+  fi
+  return 0
+}
 
 # Dedup check. Echoes "<matched-summary-path>\t<reason>" where reason is one of:
 #   hash | url              — duplicate of an existing source (move to _duplicate/)
@@ -718,7 +750,7 @@ EOF
       while IFS=$'\t' read -r m_slug m_url; do
         [[ -n "$m_url" ]] || continue
         fetch_tmp=$(mktemp -t intake-fetch)
-        if curl -fsSL --max-time 300 --retry 2 -o "$fetch_tmp" "$m_url"; then
+        if fetch_url "$m_url" "$fetch_tmp"; then
           if [[ "$(head -c 4 "$fetch_tmp" 2>/dev/null)" == "%PDF" ]]; then
             m_ext="pdf"
           else
@@ -822,7 +854,7 @@ EOF
     elif [[ -n "$cand_url" ]]; then
       log "candidate note '$base'; fetching source: $cand_url"
       fetch_tmp=$(mktemp -t intake-fetch)
-      if curl -fsSL --max-time 300 --retry 2 -o "$fetch_tmp" "$cand_url"; then
+      if fetch_url "$cand_url" "$fetch_tmp"; then
         # Name the fetched file after the note's stem (the suggested slug,
         # minus any .candidate marker) so dedup/backfill matches it strongly.
         fetch_stem="${base%.*}"
