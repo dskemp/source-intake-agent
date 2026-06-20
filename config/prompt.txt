@@ -72,7 +72,18 @@ use the exact defaults shown.
                             # (YYYY or YYYY-MM if the day is unknown)
   url: "..."                # canonical source URL — REQUIRED for anything
                             # fetched from the web; dedup and preprint
-                            # tracking match on it
+                            # tracking match on it. NEVER invent one or
+                            # recall it from memory: a guessed arXiv ID or
+                            # DOI mis-files the source, and the validator
+                            # cross-checks an arXiv id against its real
+                            # author list and REJECTS a mismatch. Use only a
+                            # URL/identifier printed in the document itself,
+                            # or one you confirm with WebFetch against the
+                            # canonical page (its title AND authors must
+                            # match this source). If you can establish none,
+                            # leave it "" — an empty url is better than a
+                            # wrong one, and it is not required for a
+                            # directly-provided file.
   retrieved: "YYYY-MM-DD"   # today — never empty
   snapshot: false           # true when <slug>.snapshot.md exists
   category: "..."           # must equal the category folder name
