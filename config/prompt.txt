@@ -148,6 +148,17 @@ Authors — IMPORTANT:
 For the Relevance section: 2-4 hedged connections to topics the existing
 library covers ("plausibly relevant to..."). If you can't infer one,
 write a single sentence on likely use case.
+- When a connection points to a specific existing source, render the
+  cross-reference as a markdown link to that source's summary file, with
+  the source's slug as the link text:
+    [other-slug](../../other-category/other-slug/other-slug.summary.md)
+  The target is relative to the new summary's own location
+  (<category>/<slug>/), so it always begins with ../../ and ends in
+  <other-slug>.summary.md. Take the category and slug from the actual
+  existing folder — never guess them. Do NOT use a bare slug or a
+  backtick-wrapped slug for a cross-reference: a reader can't follow
+  those. If you're unsure a source exists or where it is filed, refer to
+  it by title in prose rather than inventing a link.
 
 Scope — IMPORTANT:
 - Create only the new source's folder and files.
