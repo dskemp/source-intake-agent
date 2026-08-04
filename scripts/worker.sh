@@ -955,6 +955,51 @@ EOF
     if [[ "$promote_line" == PROMOTE:* ]]; then
       promote_rel="${promote_line#PROMOTE:}"
       dedup_result="$LIBRARY/$promote_rel"$'\t'"promote"
+    elif [[ "$promote_line" == VOLUME-CONTAINS:* ]]; then
+      # Proceedings-volume hold: the PDF is a multi-paper volume containing
+      # the published version of at least one tracked preprint. A promotion
+      # swap would file a whole volume as a single paper's artifact, and a
+      # normal intake would silently bury the pending promotion(s) — so park
+      # it with instructions instead of doing either. Once the chapter PDFs
+      # have promoted (clearing their cache entries), re-dropping the volume
+      # intakes normally.
+      vol_paths_file=$(mktemp -t intake-vol-paths)
+      : > "$vol_paths_file"
+      while IFS= read -r vol_line; do
+        [[ "$vol_line" == VOLUME-CONTAINS:* ]] || continue
+        printf '%s\n' "$LIBRARY/${vol_line#VOLUME-CONTAINS:}" >> "$vol_paths_file"
+      done <<< "$promote_line"
+      hold_dest="$INBOX/_failed/$base"
+      n=1
+      while [[ -e "$hold_dest" ]]; do
+        if [[ "$base" == *.* ]]; then
+          hold_dest="$INBOX/_failed/${base%.*}.${n}.${base##*.}"
+        else
+          hold_dest="$INBOX/_failed/${base}.${n}"
+        fi
+        n=$((n+1))
+      done
+      mv "$path" "$hold_dest"
+      pass_claimed=1
+      {
+        echo "Proceedings-volume hold (no intake performed)."
+        echo "Detected: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+        echo ""
+        echo "This PDF looks like a proceedings volume containing the published"
+        echo "version of the following tracked preprint(s):"
+        echo ""
+        sed 's/^/  - /' "$vol_paths_file"
+        echo ""
+        echo "To promote: fetch each paper's individual chapter PDF (its chapter"
+        echo "DOI is in preprint-checks.json) and drop it into the inbox."
+        echo "To intake this volume as a source in its own right: promote the"
+        echo "chapters first, then move this file back into the inbox — once the"
+        echo "promotions clear their cache entries, the volume intakes normally."
+      } > "${hold_dest}.log"
+      log "volume-held '$base' (contains published versions of tracked preprints; see ${hold_dest}.log)"
+      append_run "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$base" "volume-held" "$vol_paths_file" "" ""
+      rm -f "$vol_paths_file"
+      continue
     fi
   fi
   if [[ -n "$dedup_result" ]]; then
