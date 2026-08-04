@@ -157,6 +157,61 @@ LEGIT_ENTRY = {
 check("title guard accepts a genuine same-paper promotion",
       dp.title_corroborates_preprint("Attention Is All You Need", LEGIT_ENTRY) is True)
 
+# --- detect-promotion: proceedings volume containing a tracked chapter ----------
+# Guards against the ECCV 2024 Part XXIII intake: a whole proceedings volume was
+# dropped while fu-2024-blink's published version sat inside it. Neither the DOI
+# sweep (book front matter carries no chapter DOI) nor the title fallback (volume
+# title != paper title) can match, so the volume must be recognized via its
+# outline/contents and held rather than intaked as a new source.
+BLINK_REL = "ai-capabilities/fu-2024-blink/fu-2024-blink.summary.md"
+BLINK_ENTRY = {
+    "status": "published",
+    "title": "BLINK: Multimodal Large Language Models Can See but Not Perceive",
+    # Real cache value carries a non-breaking space — normalization must absorb it.
+    "published_title": "BLINK: Multimodal Large Language Models Can See but Not Perceive",
+    "published_doi": "10.1007/978-3-031-73337-6_9",
+    "published_url": "https://doi.org/10.1007/978-3-031-73337-6_9",
+}
+VOL_OUTLINE = [
+    "GENIXER: Empowering Multimodal Large Language Model as a Powerful Data Generator",
+    "BLINK: Multimodal Large Language Models Can See but Not Perceive",
+    "PreLAR: World Model Pre-training with Learnable Action Representation",
+]
+vol_candidates = [(BLINK_REL, BLINK_ENTRY)]
+check("volume outline match finds the tracked chapter",
+      dp.match_volume_candidates(VOL_OUTLINE, "", vol_candidates) == [BLINK_REL])
+check("TOC-substring fallback finds the chapter without an outline",
+      dp.match_volume_candidates(
+          [], dp.normalize_title("Contents ... BLINK: Multimodal Large Language "
+                                 "Models Can See but Not Perceive ... 148"),
+          vol_candidates) == [BLINK_REL])
+check("unrelated volume yields no hits",
+      dp.match_volume_candidates(
+          ["Weak-to-Strong Compositional Learning from Generative Models"],
+          dp.normalize_title("Uni3DL: A Unified Model for 3D Vision-Language "
+                             "Understanding"),
+          vol_candidates) == [])
+UNCONFIRMED_ENTRY = {"status": "published", "title": BLINK_ENTRY["title"]}
+check("entry without a confirmed published location is never volume-matched",
+      dp.match_volume_candidates(VOL_OUTLINE, "", [(BLINK_REL, UNCONFIRMED_ENTRY)]) == [])
+
+# main(): volume with a tracked chapter emits VOLUME-CONTAINS, never PROMOTE.
+dp.published_entries = lambda cache: vol_candidates
+dp.extract_doi_from_pdf = lambda p: ""
+dp.extract_title_from_pdf = lambda p: "Computer Vision - ECCV 2024, Part XXIII"
+dp.volume_chapter_index = lambda p: (VOL_OUTLINE, "")
+with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tf:
+    tf.write(b"%PDF-1.4 stub")
+    pdf_stub = tf.name
+sys.argv = ["detect-promotion.py", pdf_stub]
+buf = io.StringIO()
+with contextlib.redirect_stdout(buf):
+    dp.main()
+os.unlink(pdf_stub)
+check("volume run emits VOLUME-CONTAINS for the tracked chapter",
+      f"VOLUME-CONTAINS:{BLINK_REL}" in buf.getvalue())
+check("volume run emits no PROMOTE", "PROMOTE:" not in buf.getvalue())
+
 if _failures:
     print(f"\n{len(_failures)} test(s) FAILED: {_failures}")
     sys.exit(1)
