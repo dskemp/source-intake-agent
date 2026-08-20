@@ -38,6 +38,8 @@
         <string>__LIBRARY__</string>
         <key>INBOX_PATH</key>
         <string>__INBOX__</string>
+        <key>REFBOOK_PATH</key>
+        <string>__REFBOOK__</string>
         <key>CLAUDE_BIN</key>
         <string>__CLAUDE__</string>
         <key>CATEGORY_ORDER</key>

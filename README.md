@@ -146,14 +146,25 @@ $INBOX/                                ← drop files here
    source to the library's `CHANGELOG.md` (newest at top under a
    `## YYYY-MM-DD (latest)` heading), regenerate `INDEX.md`, append a JSONL
    entry with cost + duration to `runs.jsonl`.
-7. On failure: move the staged file to `_failed/` with its log next to it.
+7. **Optional stage 2 — refbook relevance triage** (only when `REFBOOK` is
+   configured): after each successful intake, a second headless `claude`
+   pass runs from the reference-book repo, decides where the new source is
+   relevant, and writes one report to `$REFBOOK/triage/<category>--<slug>.md`
+   classifying each affected subsection as *changes* an existing claim,
+   *adds* material, or overall *no effect*. Report-only: the pass can write
+   nothing outside `triage/` (path-scoped allow-list, no `acceptEdits`, no
+   Bash/network), and a triage failure never fails the filed intake
+   (`triage` / `triage-failed` entries land in `runs.jsonl`). A source with
+   an existing report is skipped, except a preprint promotion, which
+   replaces the preprint's report.
+8. On failure: move the staged file to `_failed/` with its log next to it.
    Any summary folders the failed run already created are quarantined to
    `_failed/_partial/` so a half-written summary can't dedup-block a retry.
    Validation failures behave the same but quarantine to `_failed/_rejected/`
    and log `outcome: "rejected-metadata"` to `runs.jsonl`, with the
    validator's findings in the entry's error excerpt — bad metadata never
    reaches the library or `INDEX.md`.
-8. If the worker is killed mid-run (reboot, force-quit), the next tick
+9. If the worker is killed mid-run (reboot, force-quit), the next tick
    recovers the staged input back to the inbox automatically.
 
 ## Prerequisites
@@ -263,6 +274,8 @@ you have a reason.
 | `DASHBOARD_PORT` | `7341` | Localhost port the dashboard binds to. Set it in `.env` and re-run `./install.sh` (it's rendered into the dashboard plist). |
 | `PREPRINT_REFRESH_DAYS` | `7` | Preprint cache entries older than this are re-checked. Set it in `.env` and re-run `./install.sh` (rendered into the dashboard + cron plists). |
 | `PREPRINT_PROMOTION_MODE` | `auto` | How the worker handles a PDF that looks like the published version of a tracked preprint. `auto` archives the preprint and intakes the published PDF into its category slot. `stage` routes the PDF to `_promoted/_pending/` for manual review. `off` disables detection. |
+| `TRIAGE_MODEL` | `$MODEL` | Model for the stage-2 refbook triage pass. Point it at a cheaper model if triage cost matters more than verdict quality. |
+| `TRIAGE_TIMEOUT` | `600` | Wall-clock seconds before the watchdog kills a hung triage run. Single attempt, no retries — triage is non-fatal and re-runnable. |
 
 ## Keeping the repo and the running system in sync
 

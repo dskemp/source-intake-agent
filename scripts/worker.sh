@@ -45,6 +45,14 @@ MAX_RETRIES="${MAX_RETRIES:-2}"                  # 0 = single attempt, 2 = up to
 RETRY_BACKOFF="${RETRY_BACKOFF:-30}"             # seconds between retries
 RUNS_LOG_MAX_BYTES="${RUNS_LOG_MAX_BYTES:-5242880}"   # rotate runs.jsonl > 5 MB
 RUN_LOG_KEEP="${RUN_LOG_KEEP:-50}"               # number of per-iteration archives to retain
+# Stage 2: refbook relevance triage. REFBOOK_PATH is optional — unlike
+# INBOX_PATH/LIBRARY_PATH there is no hard-fail when it's unset, because an
+# empty value is the documented way to disable the stage. install.sh renders
+# it into the plist from REFBOOK (same _PATH convention as the paths above).
+REFBOOK="${REFBOOK_PATH:-}"                      # empty = triage disabled
+TRIAGE_MODEL="${TRIAGE_MODEL:-$MODEL}"
+TRIAGE_TIMEOUT="${TRIAGE_TIMEOUT:-600}"          # wall clock per triage run
+TRIAGE_PROMPT_FILE="${TRIAGE_PROMPT_FILE:-$CONFIG/relevance-prompt.txt}"
 # Preprint promotion: how to handle PDFs that look like the published version
 # of a tracked preprint. auto = archive the preprint summary and intake the
 # published PDF into its category slot. stage = route the PDF to
@@ -538,6 +546,126 @@ else:
 cl.write_text(text)
 print(f"appended {len(entries)} CHANGELOG entr{'y' if len(entries)==1 else 'ies'}")
 PY
+}
+
+# Stage 2: triage one freshly filed summary against the refbook. A second
+# headless claude pass, run from the refbook root, decides where the new
+# source is relevant and writes ONE report to $REFBOOK/triage/ — it never
+# edits the book itself. Report-only and non-fatal by design (mirrors
+# append_changelog): a triage hiccup must never fail a filed intake, so
+# this function always returns 0.
+#
+# Permissions differ deliberately from the intake invocation: no
+# --permission-mode acceptEdits. In headless -p mode an unanswerable
+# permission prompt is a denial, so default mode plus a path-scoped
+# --allowed-tools grant is an allow-list — writes are permitted only under
+# triage/, and every other write, all Bash, and all network access are
+# denied by default (verified against the deployed CLI). The explicit
+# disallows are belt-and-suspenders for the library tree, which --add-dir
+# would otherwise leave editable.
+run_triage() {
+  local summary_path="$1" outcome="$2"
+  [[ -n "$REFBOOK" ]] || return 0
+  if [[ ! -d "$REFBOOK" ]]; then
+    log "  triage: REFBOOK not found at $REFBOOK; skipping"
+    return 0
+  fi
+  if [[ ! -f "$TRIAGE_PROMPT_FILE" ]]; then
+    log "  triage: prompt missing at $TRIAGE_PROMPT_FILE; run install.sh; skipping"
+    return 0
+  fi
+  local slug category report tprompt tlog terr tpaths tstart tpid twatchdog texit
+  slug=$(basename "$summary_path" .summary.md)
+  category=$(basename "$(dirname "$(dirname "$summary_path")")")
+  report="$REFBOOK/triage/${category}--${slug}.md"
+  if [[ -e "$report" ]]; then
+    if [[ "$outcome" == "promoted" ]]; then
+      # The published version supersedes the preprint's triage verdict.
+      rm -f "$report"
+      log "  triage: re-triaging promoted source (replacing $(basename "$report"))"
+    else
+      log "  triage: report already exists for $slug; skipping"
+      return 0
+    fi
+  fi
+  mkdir -p "$REFBOOK/triage"
+
+  tprompt=$("$PYTHON" -c '
+import sys, datetime
+template = open(sys.argv[1]).read()
+today = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
+print(template.replace("<SUMMARY_PATH>", sys.argv[2])
+              .replace("<REPORT_PATH>", sys.argv[3])
+              .replace("<INTAKE_OUTCOME>", sys.argv[4])
+              .replace("<TODAY>", today), end="")
+' "$TRIAGE_PROMPT_FILE" "$summary_path" "$report" "$outcome")
+
+  # Triage stream goes to its own temp log so append_run's cost/duration
+  # summing sees only this run's result events, not the intake's; the log
+  # is appended to $run_log afterwards so the archive keeps the full story.
+  tlog=$(mktemp -t intake-triage-log)
+  tstart=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+  log "  triage: assessing $slug against refbook (model $TRIAGE_MODEL)"
+
+  set +e
+  {
+    cd "$REFBOOK"
+    exec "$CLAUDE" -p "$tprompt" \
+      --model "$TRIAGE_MODEL" \
+      --add-dir "$LIBRARY" \
+      --allowed-tools \
+        "Write(/${REFBOOK}/triage/**)" \
+        "Edit(/${REFBOOK}/triage/**)" \
+      --disallowed-tools \
+        "Write(/${LIBRARY}/**)" \
+        "Edit(/${LIBRARY}/**)" \
+        "NotebookEdit" \
+        "Bash" \
+        "WebFetch" \
+        "WebSearch" \
+      --output-format stream-json \
+      --verbose
+  } >>"$tlog" 2>&1 &
+  tpid=$!
+
+  (
+    sleep "$TRIAGE_TIMEOUT"
+    if kill -0 "$tpid" 2>/dev/null; then
+      kill -TERM "$tpid" 2>/dev/null || true
+      sleep 3
+      kill -KILL "$tpid" 2>/dev/null || true
+    fi
+  ) &
+  twatchdog=$!
+
+  wait "$tpid"
+  texit=$?
+  set -e
+  kill "$twatchdog" 2>/dev/null || true
+  wait "$twatchdog" 2>/dev/null || true
+  # Single attempt, no retry loop: triage is non-fatal and re-runnable (the
+  # report-exists dedup above is the only state). Normalize watchdog kills.
+  if (( texit == 143 || texit == 137 )); then
+    texit=124
+  fi
+
+  cat "$tlog" >>"$run_log" 2>/dev/null || true
+  tpaths=$(mktemp -t intake-triage-paths)
+  if (( texit == 0 )) && [[ "$(head -n 1 "$report" 2>/dev/null)" == "---" ]]; then
+    printf '%s\n' "$report" > "$tpaths"
+    append_run "$tstart" "$slug" "triage" "$tpaths" "" "$tlog"
+    log "  triage report -> $report"
+  else
+    terr=$(mktemp -t intake-triage-err)
+    printf 'triage exit %d; report %s\n' "$texit" \
+      "$([[ -f "$report" ]] && echo "present but malformed" || echo "missing")" > "$terr"
+    : > "$tpaths"
+    append_run "$tstart" "$slug" "triage-failed" "$tpaths" "$terr" "$tlog"
+    log "  triage FAILED for $slug (exit $texit, non-fatal)"
+    rm -f "$terr"
+  fi
+  rm -f "$tlog" "$tpaths"
+  return 0
 }
 
 # Acquire the worker lock. Writes our PID into the lockdir so a stale lock
@@ -1507,6 +1635,16 @@ print(template.replace("<STAGED_PATH>", sys.argv[2]).replace("<DOMAIN>", domain)
       log "  INDEX.md regenerated"
     else
       log "  INDEX.md regen failed (non-fatal)"
+    fi
+    # Stage 2: refbook relevance triage — one report per produced summary.
+    # Runs last, after append_run/append_changelog/regen-index: the intake is
+    # fully filed and logged by now, $produced_list holds final post-promotion
+    # paths, and run_triage itself is non-fatal (always returns 0).
+    if [[ -n "$REFBOOK" ]]; then
+      while IFS= read -r triage_summary; do
+        [[ -n "$triage_summary" ]] || continue
+        run_triage "$triage_summary" "$outcome"
+      done < "$produced_list"
     fi
   else
     if (( validation_failed )); then
