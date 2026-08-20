@@ -28,6 +28,10 @@ Configuration (lowest to highest precedence):
                                        (used as claude context — be specific)
   LIBRARY=~/source-library             library root
   INBOX=~/source-library-inbox         watched folder
+  REFBOOK=                             optional, path to a reference-book repo;
+                                       when set, each successful intake also
+                                       writes a relevance-triage report to
+                                       \$REFBOOK/triage/ (stage 2)
   LABEL_PREFIX=com.user                plist label prefix
   CLAUDE_BIN=\$(command -v claude)      claude CLI binary
   CATEGORY_ORDER=                      optional, comma-separated category sort
@@ -50,7 +54,7 @@ done
 # documented precedence is: command-line env vars > .env > defaults. Plain
 # `source` would let .env clobber the caller's environment, so snapshot any
 # already-set values first and restore them after sourcing.
-CONFIG_VARS=(DOMAIN LIBRARY INBOX LABEL_PREFIX CLAUDE_BIN CATEGORY_ORDER
+CONFIG_VARS=(DOMAIN LIBRARY INBOX REFBOOK LABEL_PREFIX CLAUDE_BIN CATEGORY_ORDER
              OPENALEX_EMAIL DASHBOARD_EXTRA_ORIGINS DASHBOARD_PORT
              PREPRINT_REFRESH_DAYS)
 if [[ -f "$REPO_ROOT/.env" ]]; then
@@ -74,6 +78,7 @@ fi
 # --- Configurable via env vars; sensible defaults otherwise -------------------
 LIBRARY="${LIBRARY:-$HOME/source-library}"
 INBOX="${INBOX:-$HOME/source-library-inbox}"
+REFBOOK="${REFBOOK:-}"                 # empty = stage-2 triage disabled
 LABEL_PREFIX="${LABEL_PREFIX:-com.user}"
 CLAUDE_BIN="${CLAUDE_BIN:-$(command -v claude || true)}"
 CATEGORY_ORDER="${CATEGORY_ORDER:-}"
@@ -93,6 +98,7 @@ expand_tilde() {
 }
 LIBRARY="$(expand_tilde "$LIBRARY")"
 INBOX="$(expand_tilde "$INBOX")"
+[[ -n "$REFBOOK" ]] && REFBOOK="$(expand_tilde "$REFBOOK")"
 
 CONFIG="$HOME/.config/claude-source-intake"
 SCRIPTS_DIR="$HOME/Library/Scripts"
@@ -110,10 +116,14 @@ fail() { printf '\033[1;31mERROR\033[0m %s\n' "$*" >&2; exit 1; }
 [[ "$(uname -s)" == "Darwin" ]] || fail "macOS only (this uses launchd)."
 command -v python3 >/dev/null || fail "python3 not found in PATH."
 [[ -n "$CLAUDE_BIN" && -x "$CLAUDE_BIN" ]] || fail "claude CLI not found. Install Claude Code first, or set CLAUDE_BIN=/path/to/claude."
+if [[ -n "$REFBOOK" && ! -d "$REFBOOK" ]]; then
+  warn "REFBOOK is set but $REFBOOK is not a directory; the worker will skip triage until it exists."
+fi
 
 say "claude:    $CLAUDE_BIN"
 say "library:   $LIBRARY"
 say "inbox:     $INBOX"
+say "refbook:   ${REFBOOK:-<disabled>}"
 say "labels:    ${LABEL_PREFIX}.*"
 say "domain:    $DOMAIN"
 [[ -n "$DASHBOARD_EXTRA_ORIGINS" ]] && say "origins:   $DASHBOARD_EXTRA_ORIGINS"
@@ -175,6 +185,17 @@ else
   say "Keeping existing prompt at $CONFIG/prompt.txt"
 fi
 
+# --- Relevance (triage) prompt: always re-rendered ----------------------------
+# Unlike prompt.txt (user-customizable via the dashboard, so rendered only if
+# missing), the relevance prompt is treated as a build artifact: re-rendered on
+# every install so repo updates actually deploy. Customize it in the repo, not
+# in $CONFIG. Rendered even when REFBOOK is unset — the worker's REFBOOK_PATH
+# guard is the on/off switch, and a stale copy would otherwise linger.
+say "Installing relevance (triage) prompt..."
+sed -e "s|__LIBRARY__|${LIBRARY}|g" -e "s|__REFBOOK__|${REFBOOK}|g" \
+    "$REPO_ROOT/config/relevance-prompt.txt" > "$CONFIG/relevance-prompt.txt"
+chmod 0644 "$CONFIG/relevance-prompt.txt"
+
 # --- Render plists ------------------------------------------------------------
 render_plist() {
   local src="$1" dest="$2"
@@ -188,6 +209,7 @@ render_plist() {
   sed -e "s|__HOME__|${HOME}|g" \
       -e "s|__LIBRARY__|${LIBRARY}|g" \
       -e "s|__INBOX__|${INBOX}|g" \
+      -e "s|__REFBOOK__|${REFBOOK}|g" \
       -e "s|__CLAUDE__|${CLAUDE_BIN}|g" \
       -e "s|__LABEL_PREFIX__|${LABEL_PREFIX}|g" \
       -e "s|__CATEGORY_ORDER__|${CATEGORY_ORDER}|g" \
