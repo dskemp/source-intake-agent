@@ -488,6 +488,27 @@ PDFs to `$INBOX/_promoted/_pending/` for manual review instead of acting
 automatically, or `PREPRINT_PROMOTION_MODE=off` to disable detection entirely
 and treat such PDFs as fresh sources.
 
+**Don't hand-shuffle files between folders.** If a promotion went sideways —
+or you need to apply one retroactively (e.g., the preprint cache lagged and the
+published PDF was already filed as a fresh entry) — resist the urge to `mv` the
+new files into the preprint's existing folder. The worker maintains a strict
+`folder name == file basename` invariant; moving files between folders without
+also renaming the folder breaks it and leaves the audit page flagging
+mismatches. The right way to apply a retroactive promotion is:
+
+1. Delete the preprint's `<category>/<old-slug>/` folder (or use the dashboard's
+   per-row Delete button on `/library`).
+2. Drop the published-version PDF into the inbox like any other source. The
+   worker creates a clean `<category>/<new-slug>/` folder with matching file
+   names and a fresh `source_hash`.
+3. Regenerate INDEX.md if needed (the worker does this automatically on
+   success).
+
+If the preprint summary contains hand-edited content you want to preserve
+(notes, custom tags, edited Relevance), copy that text into the new summary
+*after* the worker finishes — never by reusing the preprint's folder as a
+container.
+
 ### Backfilling existing summaries
 
 If you're upgrading an installation that pre-dates dedup, run once to add
