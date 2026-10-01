@@ -180,6 +180,7 @@ deploy_script "$REPO_ROOT/scripts/validate.py"        "$SCRIPTS_DIR/claude-sourc
 deploy_script "$REPO_ROOT/scripts/library-sync.sh"    "$SCRIPTS_DIR/claude-source-intake-library-sync.sh"
 deploy_script "$REPO_ROOT/scripts/currency.py"        "$SCRIPTS_DIR/claude-source-intake-currency.py"
 deploy_script "$REPO_ROOT/scripts/retirement-triage.py" "$SCRIPTS_DIR/claude-source-intake-retirement-triage.py"
+deploy_script "$REPO_ROOT/scripts/commit-triage.sh"   "$SCRIPTS_DIR/claude-source-intake-commit-triage.sh"
 
 # Enforce 0600 on the API key file if it already exists. The README tells
 # the user to chmod 600 themselves, but it's the kind of thing that drifts;

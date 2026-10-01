@@ -56,7 +56,8 @@ rm -f "$PLISTS_DIR/${LABEL_PREFIX}.claude-source-intake.plist" \
       "$SCRIPTS_DIR/claude-source-intake-detect-promotion.py" \
       "$SCRIPTS_DIR/claude-source-intake-library-sync.sh" \
       "$SCRIPTS_DIR/claude-source-intake-currency.py" \
-      "$SCRIPTS_DIR/claude-source-intake-retirement-triage.py"
+      "$SCRIPTS_DIR/claude-source-intake-retirement-triage.py" \
+      "$SCRIPTS_DIR/claude-source-intake-commit-triage.sh"
 
 if (( PURGE )); then
   echo "==> purging config dir $CONFIG"

@@ -110,4 +110,11 @@ if [[ -n "${REFBOOK_PATH:-}" && -x "$RETIREMENT_TRIAGE" ]]; then
     | sed 's/^/[library-sync] /' || log "WARNING: retirement triage failed"
 fi
 
+# Commit pending triage reports (new ones, and the user's decision edits) in
+# the refbook checkout, so the record lives in git. Local commits on main only.
+COMMIT_TRIAGE="$HOME/Library/Scripts/claude-source-intake-commit-triage.sh"
+if [[ -n "${REFBOOK_PATH:-}" && -x "$COMMIT_TRIAGE" ]]; then
+  "$COMMIT_TRIAGE" 2>&1 | sed 's/^/[library-sync] /' || log "WARNING: committing triage reports failed"
+fi
+
 exit $status

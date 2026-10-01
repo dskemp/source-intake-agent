@@ -316,6 +316,17 @@ and from the sections' `sources_used`. It's deterministic, and like stage-2
 triage it only adds report files; an existing report, and the decision
 recorded in it, is never rewritten.
 
+**Committing triage reports.** The sync then runs `commit-triage.sh`, which
+commits pending `triage/*.md` files in the refbook checkout:
+- New reports are committed as `source-intake-agent`.
+- Edits to existing reports, which are the user's status and resolution
+  decisions, are committed under the repo's own identity, with a message saying
+  the pipeline committed them.
+
+It uses `git commit --only` on those paths, so nothing else in the checkout
+is touched. It acts only when the checkout is on `main` with no merge or rebase
+in progress, and it never pushes.
+
 ## Currency console
 
 `/currency` on the dashboard collects everything in the wider pipeline
