@@ -36,6 +36,8 @@ HEALTH = {
     "triage_proposed": [{"file": "triage/a.md", "verdict": "adds", "triaged": "2026-08-01",
                          "age_days": 60, "committed": False}],
     "triage_stale": [{"file": "triage/a.md", "verdict": "adds", "triaged": "2026-08-01", "age_days": 60}],
+    "triage_approved": [{"file": "triage/b.retirement.md", "kind": "retirement", "resolution": None}],
+    "gate_c_pr_coverage": {"since": "2026-10-01", "sections": 1, "subsections": 2, "by_file": {}},
     "sections_overdue": [], "unaudited_sources": [], "currency_check_due": [],
     "currency_check_invalid": [], "library_git": {"uncommitted_paths": 0, "unpushed_commits": 0},
 }
@@ -68,10 +70,15 @@ def test_normal_data():
     check("retired citation card warns", cards["retired-cites"]["severity"] == "warn")
     q = cards["gate-c"]["entries"]
     # docs/31 (retired cite) and docs/19 (synthesis drift) both carry open signals.
+    q = [e for e in q if e.startswith("docs/")]
     check("Gate C queue: flagged sections first",
           set(q[:2]) == {"docs/31-x.md", "docs/19-prompting-fundamentals.md"})
     check("Gate C queue: unflagged section last", q[-1] == "docs/40-y.md")
     check("Gate C count reads done/total", cards["gate-c"]["count"] == "0/3")
+    check("approved retirement without resolution is called out",
+          "needs resolution" in cards["triage-approved"]["entries"][0])
+    check("approved card offers apply-triage", any("apply triage" in x for x in cards["triage-approved"]["commands"]))
+    check("Gate C card shows PR coverage", "2 subsection(s) in 1 section(s)" in cards["gate-c"]["entries"][0])
 
 
 def test_failures_become_cards():

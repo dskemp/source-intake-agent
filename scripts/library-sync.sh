@@ -15,6 +15,8 @@
 #                                 PDFs) here; never deletes on the destination
 #   LIBRARY_BACKUP_RSYNC_PATH=    remote rsync binary, if not the default
 #                                 (Synology: /usr/bin/rsync)
+#   REFBOOK_PATH=                 when set, also write retirement triage reports
+#                                 (retirement-triage.py) into $REFBOOK_PATH/triage/
 set -uo pipefail
 
 CONFIG="$HOME/.config/claude-source-intake"
@@ -97,6 +99,22 @@ if [[ -n "$DEST" ]]; then
     log "WARNING: backup to $DEST failed"
     status=1
   fi
+fi
+
+# Retirement triage: when a source has been marked superseded/retracted/
+# withdrawn, propose a book review of every passage that cites it. Writes only
+# new report files under $REFBOOK_PATH/triage/. Non-fatal.
+RETIREMENT_TRIAGE="$HOME/Library/Scripts/claude-source-intake-retirement-triage.py"
+if [[ -n "${REFBOOK_PATH:-}" && -x "$RETIREMENT_TRIAGE" ]]; then
+  "$HOME/.config/claude-source-intake/venv/bin/python" "$RETIREMENT_TRIAGE" 2>&1 \
+    | sed 's/^/[library-sync] /' || log "WARNING: retirement triage failed"
+fi
+
+# Commit pending triage reports (new ones, and the user's decision edits) in
+# the refbook checkout, so the record lives in git. Local commits on main only.
+COMMIT_TRIAGE="$HOME/Library/Scripts/claude-source-intake-commit-triage.sh"
+if [[ -n "${REFBOOK_PATH:-}" && -x "$COMMIT_TRIAGE" ]]; then
+  "$COMMIT_TRIAGE" 2>&1 | sed 's/^/[library-sync] /' || log "WARNING: committing triage reports failed"
 fi
 
 exit $status
