@@ -323,6 +323,16 @@ def build_cards(data: dict) -> list[dict]:
              commands=[f"cd {REFBOOK} && git add triage/ && git commit -m \"Commit pending triage reports\""]
                       if uncommitted else [])
 
+        approved = h.get("triage_approved") or []
+        blocked = [t for t in approved if t.get("kind") == "retirement" and not t.get("resolution")]
+        card("triage-approved", "Approved triage ready to apply", "warn" if approved else "ok", len(approved),
+             "You approved these. apply-triage drafts the edits on a branch, audits the changed "
+             "paragraphs, and opens a PR; merging it is your review of those passages.",
+             "Run apply-triage (at most 3 sections per run), then review and merge the PR. "
+             + ("Retirement reports need a resolution: before they can be applied." if blocked else ""),
+             items=[f"{t['file']}" + (" · needs resolution:" if t in blocked else "") for t in approved],
+             commands=[f"cd {REFBOOK} && claude \"apply triage\""] if approved else [])
+
         retired = h["cites_inactive_source"]
         card("retired-cites", "Book sections citing retired sources", "warn" if retired else "ok",
              len(retired),
@@ -388,16 +398,21 @@ def build_cards(data: dict) -> list[dict]:
             m = re.match(r"docs/(\d+)-", r["file"])
             return (1 if m and 10 <= int(m.group(1)) <= 29 else 2, r["file"])
         queue = sorted(g["waiting"], key=review_priority)
+        cov = (h.get("gate_c_pr_coverage") if "error" not in h else None) or {}
         card("gate-c", "Human review (Gate C)", "warn" if g["waiting"] else "ok",
              f"{g['done']}/{g['total']}",
              ("Every section passed the automated pipeline, but none has been read and signed off "
               "by a person yet. Colleagues are reading machine-reviewed text.") if g["done"] == 0 else
              (f"{len(g['waiting'])} section(s) passed the automated pipeline but haven't been read "
               "and signed off by a person."),
-             "Read a section end to end; if it holds up, set it to Human-Reviewed in STATUS.md. "
+             "Merging a PR that changes a section counts as your review of the passages it "
+             "changed. For a whole section, read it end to end; if it holds up, set it to "
+             "Human-Reviewed in STATUS.md yourself. "
              "Suggested order: sections with open signals above first (fix, then review), then "
              "the prompting sections (§§10–29) that colleagues use most.",
-             items=[q["file"] for q in queue[:8]] + ([f"…and {len(queue) - 8} more"] if len(queue) > 8 else []))
+             items=([f"Reviewed via merged PRs since {cov['since']}: {cov['subsections']} subsection(s) "
+                     f"in {cov['sections']} section(s)"] if cov else [])
+                   + [q["file"] for q in queue[:8]] + ([f"…and {len(queue) - 8} more"] if len(queue) > 8 else []))
 
     rank = {"bad": 0, "warn": 1, "ok": 2}
     cards.sort(key=lambda c: rank[c["severity"]])
