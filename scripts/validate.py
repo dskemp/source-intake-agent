@@ -59,7 +59,7 @@ ORG_MARKERS = re.compile(
     r"University|Center|Centre|Project|Group|Foundation|Laborator|Society|Agency|"
     r"Department|Ministry|Parliament|Senate|Assembly|Board|Authority|Union|Tribunal|"
     r"Court|Directorate|Bar of|State Bar|Corporation|Inc\.|LLC|Ltd|GmbH|"
-    r"OWASP|Anthropic|OpenAI|LexisNexis|NIST|GAO|\bABA\b|\(.*\))", re.I)
+    r"OWASP|Anthropic|OpenAI|LexisNexis|Thomson Reuters|NIST|GAO|\bABA\b|\(.*\))", re.I)
 
 STATUSES = {"active", "superseded", "retracted", "withdrawn"}
 DISCOVERED_VIA = re.compile(r"^(digest:(item|scout)/\d+|candidate-note:\S.*|manual)$")

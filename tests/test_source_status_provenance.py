@@ -120,6 +120,13 @@ def test_index_marks_retired_sources():
         check("retracted source marked", "*retracted*" in row("pulled-2024"))
 
 
+def test_thomson_reuters_is_an_org():
+    # The 2025 Future of Professionals correction made "Thomson Reuters" the
+    # author; it must not be read as a person ("Reuters, Thomson").
+    check("validate: 'Thomson Reuters' is an org", not v.looks_like_person("Thomson Reuters"))
+    check("index: 'Thomson Reuters' is institutional", ri.is_institutional_author("Thomson Reuters"))
+
+
 if __name__ == "__main__":
     fns = [val for k, val in sorted(globals().items())
            if k.startswith("test_") and callable(val)]

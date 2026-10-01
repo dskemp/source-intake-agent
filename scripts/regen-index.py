@@ -109,6 +109,7 @@ _KNOWN_ORGS = {
     "NIST", "NASA", "NIH", "FDA", "EPA", "FBI", "DOJ", "CDC", "FCC", "SEC",
     "ABA", "NYCBA", "ACLU", "USPTO", "OPM", "BLS",
     "Anthropic", "OpenAI", "Google DeepMind", "DeepMind", "Microsoft Research",
+    "Thomson Reuters",
 }
 
 _VENUE_HINTS = re.compile(
