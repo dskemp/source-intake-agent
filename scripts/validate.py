@@ -6,6 +6,7 @@ Usage: claude-source-intake-validate.py --paths-file <file-with-one-path-per-lin
 
 Phase 1 (normalize, in place, targeted line edits — never a full YAML rewrite):
   - superseded_by: null/missing      -> ""
+  - status: missing                  -> "superseded" if superseded_by is set, else "active"
   - snapshot:                        -> true/false to match <slug>.snapshot.md existence
   - retrieved: null/empty/missing    -> today (UTC)
   - currency_check: null/empty/bad   -> retrieved date (semantics: last date confirmed current)
@@ -15,6 +16,9 @@ Phase 1 (normalize, in place, targeted line edits — never a full YAML rewrite)
 Phase 2 (validate; any hard failure exits 1 and the worker quarantines):
   - frontmatter parses; required fields present and non-empty
   - source_type in the template enum
+  - status in active|superseded|retracted|withdrawn; "superseded" needs superseded_by
+  - discovered_via (optional; stamped by the worker after intake) is
+    digest:item/<id>, digest:scout/<id>, candidate-note:<name>, or manual
   - date formats (date: YYYY[-MM[-DD]]; retrieved/currency_check: YYYY-MM-DD)
   - category field equals the parent category folder; slug/folder/filename agree
   - authors: block list; no "X et al." placeholder entries; entries that look
@@ -56,6 +60,9 @@ ORG_MARKERS = re.compile(
     r"Department|Ministry|Parliament|Senate|Assembly|Board|Authority|Union|Tribunal|"
     r"Court|Directorate|Bar of|State Bar|Corporation|Inc\.|LLC|Ltd|GmbH|"
     r"OWASP|Anthropic|OpenAI|LexisNexis|NIST|GAO|\bABA\b|\(.*\))", re.I)
+
+STATUSES = {"active", "superseded", "retracted", "withdrawn"}
+DISCOVERED_VIA = re.compile(r"^(digest:(item|scout)/\d+|candidate-note:\S.*|manual)$")
 
 DATE_FULL = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 DATE_LOOSE = re.compile(r"^\d{4}(-\d{2})?(-\d{2})?$")
@@ -161,6 +168,13 @@ def process(path):
         new_fm = set_scalar(new_fm, "superseded_by", '""')
         notes.append("superseded_by -> \"\"")
 
+    status = (get_scalar(new_fm, "status") or "").strip('"').strip("'").lower()
+    if status in ("", "null", "~", "none"):
+        sb_val = (get_scalar(new_fm, "superseded_by") or "").strip('"').strip("'")
+        status = "superseded" if sb_val else "active"
+        new_fm = set_scalar(new_fm, "status", status)
+        notes.append(f"status -> {status}")
+
     snap_exists = (folder / f"{slug}.snapshot.md").is_file()
     snap = get_scalar(new_fm, "snapshot")
     want = "true" if snap_exists else "false"
@@ -209,6 +223,16 @@ def process(path):
 
     if st not in ENUM:
         errors.append(f"source_type '{st}' not in enum {sorted(ENUM)}")
+
+    if status not in STATUSES:
+        errors.append(f"status '{status}' not in {sorted(STATUSES)}")
+    elif status == "superseded" and not (get_scalar(new_fm, "superseded_by") or "").strip('"').strip("'"):
+        errors.append("status is superseded but superseded_by is empty (name the successor's slug)")
+
+    dv = get_scalar(new_fm, "discovered_via")
+    if dv is not None and not DISCOVERED_VIA.match(dv.strip('"').strip("'")):
+        errors.append(f"discovered_via '{dv}' must be digest:item/<id>, digest:scout/<id>, "
+                      "candidate-note:<name>, or manual")
 
     date = (get_scalar(new_fm, "date") or "").strip('"').strip("'")
     if date and not DATE_LOOSE.match(date):

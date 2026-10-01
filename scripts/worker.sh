@@ -36,6 +36,11 @@ LOCKDIR="/tmp/claude-source-intake.lock"
 PROMPT_FILE="$CONFIG/prompt.txt"
 PAUSED_FLAG="$CONFIG/paused"
 RUNS_LOG="$CONFIG/runs.jsonl"
+# One file per fetched candidate, named after the fetched inbox file, holding
+# where the candidate came from (e.g. digest:item/123). Read and removed when
+# that file's intake succeeds; it survives a failed run, so a retry from
+# _failed/ keeps its provenance.
+PROVENANCE_DIR="$CONFIG/provenance"
 RUN_LOGS_DIR="$CONFIG/run-logs"
 
 # Tunables (override via the env file above, or the launchd plist).
@@ -345,6 +350,57 @@ if str(fm.get('status') or '').strip() != 'candidate-for-intake':
     sys.exit(0)
 url = str(fm.get('pdf_url') or fm.get('url') or '').strip()
 print(url if url.startswith(('http://', 'https://')) else 'NONE')
+PY
+}
+
+# Echo a candidate note's discovered_via (e.g. "digest:item/123"), or
+# "candidate-note:<note name>" when the note doesn't say. Notes written by the
+# digest dashboard carry the field; notes staged by draft-section don't.
+candidate_provenance() {
+  local note_path="$1"
+  "$PYTHON" - "$note_path" <<'PY'
+import os, sys
+import yaml
+path = sys.argv[1]
+value = ""
+try:
+    with open(path, errors="replace") as f:
+        head = f.read(65536)
+    end = head.find("\n---\n", 4)
+    if head.startswith("---\n") and end != -1:
+        fm = yaml.safe_load(head[4:end]) or {}
+        value = str(fm.get("discovered_via") or "").strip()
+except Exception:
+    pass
+print(value or f"candidate-note:{os.path.basename(path)}")
+PY
+}
+
+# Remember where a fetched candidate came from until its intake succeeds.
+record_provenance() {
+  local fetched_path="$1" value="$2"
+  mkdir -p "$PROVENANCE_DIR"
+  printf '%s\n' "$value" > "$PROVENANCE_DIR/$(basename "$fetched_path")" 2>/dev/null || true
+}
+
+# Stamp discovered_via: into a summary's frontmatter unless it already has one.
+inject_discovered_via() {
+  local summary_path="$1" value="$2"
+  "$PYTHON" - "$summary_path" "$value" <<'PY'
+import re, sys
+from pathlib import Path
+path, value = Path(sys.argv[1]), sys.argv[2].replace('"', '')
+text = path.read_text()
+end = text.find('\n---\n', 4)
+if not text.startswith('---\n') or end == -1:
+    sys.exit(1)
+fm = text[:end + 1]
+if re.search(r'^discovered_via:', fm, re.MULTILINE):
+    sys.exit(0)
+line = f'discovered_via: "{value}"\n'
+m = re.search(r'^superseded_by:[^\n]*\n', fm, re.MULTILINE)
+at = m.end() if m else end + 1
+path.write_text(text[:at] + line + text[at:])
 PY
 }
 
@@ -891,6 +947,7 @@ EOF
             n=$((n+1))
           done
           if mv "$fetch_tmp" "$fetch_dest"; then
+            record_provenance "$fetch_dest" "$(candidate_provenance "$path")"
             printf '%s\n' "$fetch_dest" >> "$cand_paths_file"
             fetched_n=$((fetched_n+1))
             log "  fetched '$m_slug' -> $(basename "$fetch_dest")"
@@ -1005,6 +1062,7 @@ EOF
           rm -f "$fetch_tmp"
           continue
         fi
+        record_provenance "$fetch_dest" "$(candidate_provenance "$path")"
         note_dest="$INBOX/_notes/$base"
         n=1
         while [[ -e "$note_dest" ]]; do
@@ -1622,6 +1680,17 @@ print(template.replace("<STAGED_PATH>", sys.argv[2]).replace("<DOMAIN>", domain)
         log "  NOTE: $promote_target_dir not empty after promotion; leaving in place"
       fi
     fi
+    # Provenance: where this source came from (digest item, candidate note, or
+    # a manual drop). Stamped before CHANGELOG/INDEX/sync so the commit has it.
+    prov_file="$PROVENANCE_DIR/$base"
+    discovered_via="manual"
+    [[ -s "$prov_file" ]] && discovered_via=$(head -n 1 "$prov_file")
+    while IFS= read -r prov_summary; do
+      [[ -n "$prov_summary" ]] || continue
+      inject_discovered_via "$prov_summary" "$discovered_via" || \
+        log "  WARNING: failed to stamp discovered_via into $prov_summary"
+    done < "$produced_list"
+    rm -f "$prov_file"
     rm -f "$staged_path"
     outcome="success"
     (( is_promotion )) && outcome="promoted"
