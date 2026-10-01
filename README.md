@@ -589,11 +589,34 @@ tags:
   - tag1
 currency_check: "YYYY-MM-DD"
 superseded_by: ""
+status: active                    # active | superseded | retracted | withdrawn
+discovered_via: "manual"          # auto-stamped by worker; see below
 ---
 ```
 
 The `tldr` field powers the Tl;dr column in `INDEX.md` and the dashboard's
 Library page. The prompt requires it on every intake.
+
+**Lifecycle.** `status` says whether a source is still usable as current.
+`validate.py` fills it in when missing: `superseded` if `superseded_by` names a
+successor, otherwise `active`. A `superseded` status needs a successor slug in
+`superseded_by`; `retracted` and `withdrawn` don't. Retired sources stay in the
+library and in `INDEX.md`, marked (*superseded → new-slug*), because anything
+built on the library may still cite them. Changing a status is a human
+decision; intake never retires a source on its own.
+
+**Provenance.** After a successful intake the worker stamps `discovered_via`:
+
+| Value | Meaning |
+|---|---|
+| `digest:item/<id>`, `digest:scout/<id>` | came from a candidate note downloaded from the digest dashboard |
+| `candidate-note:<note file>` | came from any other candidate note (e.g. one staged by draft-section) |
+| `manual` | dropped into the inbox directly |
+
+A candidate note passes its value through its own `discovered_via:`
+frontmatter field. The worker holds it in
+`~/.config/claude-source-intake/provenance/<fetched file>` until that file's
+intake succeeds, so a retry from `_failed/` keeps it.
 
 ## Troubleshooting
 

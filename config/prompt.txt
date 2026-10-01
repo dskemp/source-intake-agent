@@ -100,6 +100,7 @@ use the exact defaults shown.
                                 # is current = today at intake. NEVER a
                                 # future review-due date.
   superseded_by: ""
+  status: active                # active | superseded | retracted | withdrawn
   ---
 
 Do NOT add a source_hash: field — the wrapper injects it after the run.

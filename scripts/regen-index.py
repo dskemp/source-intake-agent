@@ -58,6 +58,9 @@ def collect_sources(library: Path):
             authors = [authors]
         date = str(fm.get("date") or "")
         year = date[:4] if len(date) >= 4 else ""
+        superseded_by = str(fm.get("superseded_by") or "").strip()
+        status = str(fm.get("status") or "").strip().lower() or (
+            "superseded" if superseded_by else "active")
         by_cat.setdefault(category, []).append({
             "title": fm.get("title") or summary.stem,
             "tldr": (fm.get("tldr") or "").strip(),
@@ -67,6 +70,8 @@ def collect_sources(library: Path):
             "tags": fm.get("tags") or [],
             "rel_path": rel_path,
             "category": category,
+            "status": status,
+            "superseded_by": superseded_by,
         })
     for sources in by_cat.values():
         sources.sort(key=lambda s: (s["date"], s["title"]), reverse=True)
@@ -104,6 +109,7 @@ _KNOWN_ORGS = {
     "NIST", "NASA", "NIH", "FDA", "EPA", "FBI", "DOJ", "CDC", "FCC", "SEC",
     "ABA", "NYCBA", "ACLU", "USPTO", "OPM", "BLS",
     "Anthropic", "OpenAI", "Google DeepMind", "DeepMind", "Microsoft Research",
+    "Thomson Reuters",
 }
 
 _VENUE_HINTS = re.compile(
@@ -186,6 +192,11 @@ def render_index(by_cat: dict, library: Path) -> str:
         lines.append("|-------|-------|-----------|------|")
         for s in sources:
             title_link = f"[{escape_pipe(s['title'])}]({s['rel_path']})"
+            if s["status"] != "active":
+                # Retired sources stay listed (the book may still cite them),
+                # marked so nobody reaches for them as current.
+                mark = s["status"] + (f" → {s['superseded_by']}" if s["superseded_by"] else "")
+                title_link += f" · *{escape_pipe(mark)}*"
             tldr = escape_pipe(s["tldr"]) or "—"
             authors = escape_pipe(render_authors(s["authors"]))
             year = s["year"] or "—"
