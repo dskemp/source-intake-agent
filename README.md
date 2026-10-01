@@ -307,6 +307,46 @@ deletes, hand edits) as `Library sync: N path(s) changed outside intake`.
 - SSH runs with `BatchMode=yes`, so the key must load without a prompt (a
   key with no passphrase, or one stored with `UseKeychain yes`).
 
+## Currency console
+
+`/currency` on the dashboard collects everything in the wider pipeline
+(digest → library → reference book → derived guides) that is waiting on a
+person. Each card has a count, why it matters, exactly what to do, and where
+it helps a copyable command. The page reads only; decisions stay in their
+own files and dashboards. Its three buttons start safe jobs: refresh the
+data, sync the library to its remote, and run the digest backup.
+
+Cards:
+- backups: the digest database dump, and library commits and pushes
+- digest library candidates, plus whether a recalibration is due
+- triage reports awaiting a decision
+- book sections citing retired sources
+- guides and sections behind the prompt-engineering synthesis
+- unaudited sources
+- library currency checks
+- overdue sections
+- human review (Gate C), with a suggested reading order
+
+A routines table shows when each recurring task was last done, read from git
+history rather than memory.
+
+Data comes from `scripts/currency.py` (deployed beside the dashboard):
+
+| Source | What it provides |
+|---|---|
+| `REFBOOK_PATH` | the refbook's `scripts/pipeline-health.py`, plus `detect-state.py` for Gate C |
+| the digest's public `/api/library-flagged` | open flags and labels |
+| `~/.config/digest-backup/status.json` | the outcome of the digest backup job |
+| `LIBRARY_AUDIT_PATH` and `DIGEST_REPO_PATH` | last-done dates, defaulting to `~/Cowork/active/library-audit` and `~/Developer/digest` |
+
+A missing source becomes a card that says so, never an error page. Results
+are cached for 10 minutes.
+
+A weekly launchd job (Monday 07:30) runs `currency.py --notify`, which posts
+a macOS notification with the count of items needing attention and the
+console's URL. That URL is the first `DASHBOARD_EXTRA_ORIGINS` entry, or
+localhost.
+
 ## Keeping the repo and the running system in sync
 
 The deployed scripts live at `~/Library/Scripts/` and the launchd plists at
@@ -665,13 +705,15 @@ source-intake-agent/
 │   ├── check-preprints.py    ← OpenAlex lookup for arXiv/SSRN promotion
 │   ├── detect-promotion.py   ← worker hook: match dropped PDF to a tracked preprint
 │   ├── library-sync.sh       ← commit, push, and back up the library (opt-in)
+│   ├── currency.py           ← currency console data + weekly notification
 │   ├── backfill-hashes.py    ← one-shot: add source_hash to existing summaries
 │   └── migrate-institutional-authors.py  ← one-shot: normalize org-authored summaries
 ├── launchd/
 │   ├── worker.plist.template
 │   ├── dashboard.plist.template
 │   ├── preprint-check.plist.template      (weekly cron, Mon 03:15)
-│   └── library-sync.plist.template        (daily backstop, 03:45)
+│   ├── library-sync.plist.template        (daily backstop, 03:45)
+│   └── currency-notify.plist.template     (weekly, Mon 07:30)
 └── config/
     └── prompt.txt               ← default autonomy prompt; __LIBRARY__ token
                                     is substituted on first install

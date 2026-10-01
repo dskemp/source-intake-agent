@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>__LABEL_PREFIX__.claude-source-intake-currency-notify</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>__HOME__/.config/claude-source-intake/venv/bin/python</string>
+        <string>__HOME__/Library/Scripts/claude-source-intake-currency.py</string>
+        <string>--notify</string>
+    </array>
+    <!-- Weekly: Monday 07:30. Posts a macOS notification saying how many
+         currency-console items need attention; the summary text goes to the
+         log. Read-only. If the Mac is asleep, launchd runs it on wake. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Weekday</key>
+        <integer>1</integer>
+        <key>Hour</key>
+        <integer>7</integer>
+        <key>Minute</key>
+        <integer>30</integer>
+    </dict>
+    <key>RunAtLoad</key>
+    <false/>
+    <key>StandardOutPath</key>
+    <string>/tmp/claude-source-intake-currency-notify.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/claude-source-intake-currency-notify.err.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>__HOME__</string>
+        <key>LIBRARY_PATH</key>
+        <string>__LIBRARY__</string>
+        <key>REFBOOK_PATH</key>
+        <string>__REFBOOK__</string>
+        <key>DASHBOARD_EXTRA_ORIGINS</key>
+        <string>__DASHBOARD_EXTRA_ORIGINS__</string>
+        <key>DASHBOARD_PORT</key>
+        <string>__DASHBOARD_PORT__</string>
+    </dict>
+</dict>
+</plist>

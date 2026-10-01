@@ -7,6 +7,7 @@ request layer as defense-in-depth against browser CSRF (see
 """
 import calendar
 import datetime
+import importlib.util
 import json
 import logging
 import os
@@ -764,6 +765,7 @@ def nav_html(active: str) -> str:
   <a href="/library"{attrs("library")}>Library</a>
   <a href="/preprints"{attrs("preprints")}>Preprints</a>
   <a href="/audit"{attrs("audit")}>Audit</a>
+  <a href="/currency"{attrs("currency")}>Currency</a>
 </nav>"""
 
 
@@ -2026,6 +2028,173 @@ def audit_view():
         shared_styles=SHARED_STYLES,
         flash=request.args.get("flash", ""),
     )
+
+
+# --- Currency console -------------------------------------------------------------
+# What across the digest → library → refbook → guides pipeline is waiting on a
+# human (integration-design.md in the refbook). Data gathering lives in
+# currency.py, deployed beside this file; the page only renders it and offers
+# the few actions that are safe to launch from here. Nothing on this page sets
+# an approval state (triage approved, digest added, Human-Reviewed).
+LIBRARY_SYNC = HOME / "Library/Scripts/claude-source-intake-library-sync.sh"
+DIGEST_BACKUP_LABEL = "com.dsk.digest-backup"
+_currency_mod = None
+
+
+def currency_module():
+    global _currency_mod
+    if _currency_mod is None:
+        here = Path(__file__).resolve().parent
+        for name in ("claude-source-intake-currency.py", "currency.py"):
+            candidate = here / name
+            if candidate.exists():
+                spec = importlib.util.spec_from_file_location("currency", candidate)
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                _currency_mod = mod
+                break
+    return _currency_mod
+
+
+CURRENCY_TEMPLATE = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Currency console</title>
+{{ font_link | safe }}
+{{ shared_styles | safe }}
+<style>
+  .cards { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-4); margin-top: var(--space-4); }
+  .card { background: var(--color-surface); border: 1px solid var(--color-border); border-left: 4px solid var(--color-border-strong); border-radius: var(--radius-md); padding: var(--space-4) var(--space-5); box-shadow: var(--shadow-1); }
+  .card.bad { border-left-color: var(--color-error-600); }
+  .card.warn { border-left-color: var(--color-warning-600, #B7791F); }
+  .card.ok { border-left-color: var(--color-success-600); }
+  .card h2 { font-size: 1.05rem; margin: 0; display: flex; gap: var(--space-3); align-items: baseline; }
+  .card .count { font-family: var(--font-ui); font-weight: 600; color: var(--color-primary); }
+  .card.bad .count { color: var(--color-error-700); }
+  .card.ok .count { color: var(--color-success-700); }
+  .card .why { color: var(--color-text-muted); font-size: 0.9rem; margin: var(--space-2) 0; }
+  .card .todo { margin: var(--space-2) 0; }
+  .card .todo::before { content: "What to do: "; font-weight: 600; }
+  .card ul { margin: var(--space-2) 0 0; padding-left: 1.2em; font-size: 0.88rem; }
+  .card li { margin: 2px 0; overflow-wrap: anywhere; }
+  .card .err { color: var(--color-error-700); font-size: 0.9rem; }
+  .cmd { display: flex; gap: var(--space-2); align-items: center; margin-top: var(--space-2); }
+  .cmd code { flex: 1; overflow-x: auto; white-space: nowrap; padding: var(--space-1) var(--space-2); background: var(--color-surface-alt); border-radius: var(--radius-sm); font-size: 0.82rem; }
+  details.okcards summary { cursor: pointer; color: var(--color-text-muted); margin-top: var(--space-6); }
+  .table-scroll { overflow-x: auto; }
+  table.rhythm { width: 100%; border-collapse: collapse; font-size: 0.9rem; margin-top: var(--space-3); }
+  table.rhythm th, table.rhythm td { text-align: left; padding: var(--space-2); border-bottom: 1px solid var(--color-border); }
+  table.rhythm tr.due td:first-child::after { content: " · due"; color: var(--color-warning-700); font-weight: 600; }
+  .actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+</style>
+</head>
+<body>
+{{ nav | safe }}
+<main>
+<h1>Currency console</h1>
+<p class="tagline">What across the digest → library → book → guides pipeline is waiting on you. Read-only: decisions stay in their own files and dashboards.</p>
+{% if flash %}<div class="flash">{{ flash }}</div>{% endif %}
+
+{% if error %}
+<div class="flash" style="background:var(--color-error-100); border-color:var(--color-error-600); color:var(--color-error-700)">{{ error }}</div>
+{% else %}
+<div class="strip">
+  <span class="mute">Gathered {{ data.generated }} · cached 10 min</span>
+  <span class="grow"></span>
+  <div class="actions">
+    <form method="post" action="/currency/refresh"><button class="primary">Refresh now</button></form>
+    <form method="post" action="/currency/sync-library"><button>Sync library to NAS</button></form>
+    <form method="post" action="/currency/backup-digest"><button>Back up digest now</button></form>
+  </div>
+</div>
+
+{% set need = data.cards | rejectattr("severity", "equalto", "ok") | list %}
+{% set fine = data.cards | selectattr("severity", "equalto", "ok") | list %}
+<div class="summary-tiles">
+  <div class="tile {% if need|selectattr('severity','equalto','bad')|list %}bad{% elif need %}warn{% else %}ok{% endif %}">
+    <div class="n">{{ need|length }}</div><div class="label">Need you</div></div>
+  <div class="tile ok"><div class="n">{{ fine|length }}</div><div class="label">All clear</div></div>
+  <div class="tile {% if data.rhythm|selectattr('due')|list %}warn{% else %}ok{% endif %}">
+    <div class="n">{{ data.rhythm|selectattr('due')|list|length }}</div><div class="label">Routines overdue</div></div>
+</div>
+
+{% macro render(c) %}
+<section class="card {{ c.severity }}" id="{{ c.key }}">
+  <h2><span class="count">{{ c.count }}</span> {{ c.title }}</h2>
+  {% if c.error %}<p class="err">{{ c.error }}</p>{% endif %}
+  {% if c.why %}<p class="why">{{ c.why }}</p>{% endif %}
+  {% if c.todo and c.severity != "ok" %}<p class="todo">{{ c.todo }}</p>{% endif %}
+  {% for href, label in c.links %}<p><a href="{{ href }}" target="_blank" rel="noopener">{{ label }} ↗</a></p>{% endfor %}
+  {% for cmd in c.commands %}
+  <div class="cmd"><code>{{ cmd }}</code><button type="button" onclick="navigator.clipboard.writeText(this.previousElementSibling.textContent); this.textContent='Copied'">Copy</button></div>
+  {% endfor %}
+  {% if c.entries %}<ul>{% for i in c.entries %}<li>{{ i }}</li>{% endfor %}</ul>{% endif %}
+</section>
+{% endmacro %}
+
+<div class="cards">{% for c in need %}{{ render(c) }}{% endfor %}</div>
+{% if not need %}<p>Nothing needs you right now.</p>{% endif %}
+
+<h2 style="margin-top:var(--space-8)">Routines</h2>
+<div class="table-scroll"><table class="rhythm">
+  <tr><th>Routine</th><th>Cadence</th><th>Last done</th><th>Now</th></tr>
+  {% for r in data.rhythm %}
+  <tr class="{% if r.due %}due{% endif %}"><td>{{ r.task }}</td><td>{{ r.cadence }}</td>
+    <td>{{ r.last or "—" }}{% if r.age_days is not none %} ({{ r.age_days }} d){% endif %}</td><td>{{ r.note or "" }}</td></tr>
+  {% endfor %}
+</table></div>
+
+<details class="okcards"><summary>All-clear checks ({{ fine|length }})</summary>
+<div class="cards">{% for c in fine %}{{ render(c) }}{% endfor %}</div>
+</details>
+{% endif %}
+</main>
+</body>
+</html>"""
+
+
+@app.route("/currency")
+def currency_view():
+    mod = currency_module()
+    error, data = None, None
+    if mod is None:
+        error = "currency.py is not deployed next to the dashboard; re-run install.sh."
+    else:
+        data = mod.gather()
+    return render_template_string(
+        CURRENCY_TEMPLATE, data=data, error=error,
+        nav=nav_html("currency"), font_link=FONT_LINK, shared_styles=SHARED_STYLES,
+        flash=request.args.get("flash", ""),
+    )
+
+
+@app.route("/currency/refresh", methods=["POST"])
+def currency_refresh():
+    mod = currency_module()
+    if mod is not None:
+        mod.gather(force=True)
+    return redirect("/currency?flash=Refreshed")
+
+
+@app.route("/currency/sync-library", methods=["POST"])
+def currency_sync_library():
+    if not LIBRARY_SYNC.exists():
+        return redirect("/currency?flash=library-sync.sh is not deployed; re-run install.sh")
+    subprocess.Popen([str(LIBRARY_SYNC), "Library sync from the currency console"],
+                     stdout=open("/tmp/claude-source-intake-library-sync.out.log", "a"),
+                     stderr=subprocess.STDOUT, start_new_session=True)
+    return redirect("/currency?flash=Library sync started. Refresh in a minute to see the result")
+
+
+@app.route("/currency/backup-digest", methods=["POST"])
+def currency_backup_digest():
+    res = subprocess.run(["launchctl", "kickstart", f"gui/{os.getuid()}/{DIGEST_BACKUP_LABEL}"],
+                         capture_output=True, text=True, check=False)
+    if res.returncode != 0:
+        return redirect("/currency?flash=Could not start the digest backup job (is it installed?)")
+    return redirect("/currency?flash=Digest backup started. It takes about 15 seconds; then refresh")
 
 
 @app.route("/regen-index", methods=["POST"])

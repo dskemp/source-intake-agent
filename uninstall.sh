@@ -41,18 +41,21 @@ unload_agent "${LABEL_PREFIX}.claude-source-intake"
 unload_agent "${LABEL_PREFIX}.claude-source-intake-ui"
 unload_agent "${LABEL_PREFIX}.claude-source-intake-preprint-check"
 unload_agent "${LABEL_PREFIX}.claude-source-intake-library-sync"
+unload_agent "${LABEL_PREFIX}.claude-source-intake-currency-notify"
 
 echo "==> removing deployed scripts and plists"
 rm -f "$PLISTS_DIR/${LABEL_PREFIX}.claude-source-intake.plist" \
       "$PLISTS_DIR/${LABEL_PREFIX}.claude-source-intake-ui.plist" \
       "$PLISTS_DIR/${LABEL_PREFIX}.claude-source-intake-preprint-check.plist" \
       "$PLISTS_DIR/${LABEL_PREFIX}.claude-source-intake-library-sync.plist" \
+      "$PLISTS_DIR/${LABEL_PREFIX}.claude-source-intake-currency-notify.plist" \
       "$SCRIPTS_DIR/claude-source-intake.sh" \
       "$SCRIPTS_DIR/claude-source-intake-ui.py" \
       "$SCRIPTS_DIR/claude-source-intake-regen-index.py" \
       "$SCRIPTS_DIR/claude-source-intake-check-preprints.py" \
       "$SCRIPTS_DIR/claude-source-intake-detect-promotion.py" \
-      "$SCRIPTS_DIR/claude-source-intake-library-sync.sh"
+      "$SCRIPTS_DIR/claude-source-intake-library-sync.sh" \
+      "$SCRIPTS_DIR/claude-source-intake-currency.py"
 
 if (( PURGE )); then
   echo "==> purging config dir $CONFIG"

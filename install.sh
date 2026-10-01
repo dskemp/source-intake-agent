@@ -119,6 +119,7 @@ WORKER_LABEL="${LABEL_PREFIX}.claude-source-intake"
 DASHBOARD_LABEL="${LABEL_PREFIX}.claude-source-intake-ui"
 PREPRINT_LABEL="${LABEL_PREFIX}.claude-source-intake-preprint-check"
 SYNC_LABEL="${LABEL_PREFIX}.claude-source-intake-library-sync"
+NOTIFY_LABEL="${LABEL_PREFIX}.claude-source-intake-currency-notify"
 
 say() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m!!\033[0m %s\n' "$*" >&2; }
@@ -177,6 +178,7 @@ deploy_script "$REPO_ROOT/scripts/detect-promotion.py" "$SCRIPTS_DIR/claude-sour
 deploy_script "$REPO_ROOT/scripts/candidate-manifest.py" "$SCRIPTS_DIR/claude-source-intake-candidate-manifest.py"
 deploy_script "$REPO_ROOT/scripts/validate.py"        "$SCRIPTS_DIR/claude-source-intake-validate.py"
 deploy_script "$REPO_ROOT/scripts/library-sync.sh"    "$SCRIPTS_DIR/claude-source-intake-library-sync.sh"
+deploy_script "$REPO_ROOT/scripts/currency.py"        "$SCRIPTS_DIR/claude-source-intake-currency.py"
 
 # Enforce 0600 on the API key file if it already exists. The README tells
 # the user to chmod 600 themselves, but it's the kind of thing that drifts;
@@ -244,6 +246,7 @@ render_plist "$REPO_ROOT/launchd/worker.plist.template"          "$PLISTS_DIR/$W
 render_plist "$REPO_ROOT/launchd/dashboard.plist.template"       "$PLISTS_DIR/$DASHBOARD_LABEL.plist"
 render_plist "$REPO_ROOT/launchd/preprint-check.plist.template"  "$PLISTS_DIR/$PREPRINT_LABEL.plist"
 render_plist "$REPO_ROOT/launchd/library-sync.plist.template"    "$PLISTS_DIR/$SYNC_LABEL.plist"
+render_plist "$REPO_ROOT/launchd/currency-notify.plist.template" "$PLISTS_DIR/$NOTIFY_LABEL.plist"
 
 # --- (Re)load launchd agents --------------------------------------------------
 UID_NUM="$(id -u)"
@@ -260,11 +263,13 @@ reload_agent "$WORKER_LABEL"
 reload_agent "$DASHBOARD_LABEL"
 reload_agent "$PREPRINT_LABEL"
 reload_agent "$SYNC_LABEL"
+reload_agent "$NOTIFY_LABEL"
 
 # --- Summary ------------------------------------------------------------------
 echo
 say "Installed."
 echo "  Dashboard:     http://localhost:${DASHBOARD_PORT}"
+echo "  Currency:      http://localhost:${DASHBOARD_PORT}/currency"
 echo "  Inbox:         $INBOX"
 echo "  Library:       $LIBRARY"
 echo "  Logs:          /tmp/claude-source-intake{,.err}.log"
