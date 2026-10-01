@@ -1646,6 +1646,21 @@ print(template.replace("<STAGED_PATH>", sys.argv[2]).replace("<DOMAIN>", domain)
         run_triage "$triage_summary" "$outcome"
       done < "$produced_list"
     fi
+    # Commit, push, and back up the library (each step opt-in via
+    # LIBRARY_AUTOCOMMIT / LIBRARY_GIT_REMOTE / LIBRARY_BACKUP_DEST).
+    # Non-fatal: the intake is already filed; a failed push retries on the
+    # next sync.
+    sync_msg="Intake:"
+    (( is_promotion )) && sync_msg="Promote preprint:"
+    sync_sep=" "
+    while IFS= read -r synced_summary; do
+      [[ -n "$synced_summary" ]] || continue
+      synced_rel="${synced_summary#"$LIBRARY"/}"
+      sync_msg+="${sync_sep}$(dirname "$synced_rel")"
+      sync_sep=", "
+    done < "$produced_list"
+    "$HOME/Library/Scripts/claude-source-intake-library-sync.sh" "$sync_msg" 2>&1 \
+      | sed 's/^/  /' || true
   else
     if (( validation_failed )); then
       log "  rejected (metadata validation failed; $num_produced summary file(s) quarantined)"

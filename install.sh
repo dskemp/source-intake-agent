@@ -43,6 +43,12 @@ Configuration (lowest to highest precedence):
   DASHBOARD_PORT=7341                  localhost port the dashboard binds to
   PREPRINT_REFRESH_DAYS=7              re-check preprint cache entries older
                                        than this many days
+  LIBRARY_AUTOCOMMIT=0                 1 = commit the library (if it is a git
+                                       repo) after each intake and daily
+  LIBRARY_GIT_REMOTE=                  optional, remote to push the library to
+  LIBRARY_BACKUP_DEST=                 optional, rsync destination for a full
+                                       copy of the library, PDFs included
+  LIBRARY_BACKUP_RSYNC_PATH=           optional, remote rsync binary
 USAGE
       exit 0 ;;
     *) echo "unknown arg: $arg" >&2; exit 2 ;;
@@ -56,7 +62,8 @@ done
 # already-set values first and restore them after sourcing.
 CONFIG_VARS=(DOMAIN LIBRARY INBOX REFBOOK LABEL_PREFIX CLAUDE_BIN CATEGORY_ORDER
              OPENALEX_EMAIL DASHBOARD_EXTRA_ORIGINS DASHBOARD_PORT
-             PREPRINT_REFRESH_DAYS)
+             PREPRINT_REFRESH_DAYS LIBRARY_AUTOCOMMIT LIBRARY_GIT_REMOTE
+             LIBRARY_BACKUP_DEST LIBRARY_BACKUP_RSYNC_PATH)
 if [[ -f "$REPO_ROOT/.env" ]]; then
   _pre_vals=()
   for _v in "${CONFIG_VARS[@]}"; do
@@ -87,6 +94,10 @@ OPENALEX_EMAIL="${OPENALEX_EMAIL:-}"
 DASHBOARD_EXTRA_ORIGINS="${DASHBOARD_EXTRA_ORIGINS:-}"
 DASHBOARD_PORT="${DASHBOARD_PORT:-7341}"
 PREPRINT_REFRESH_DAYS="${PREPRINT_REFRESH_DAYS:-7}"
+LIBRARY_AUTOCOMMIT="${LIBRARY_AUTOCOMMIT:-0}"
+LIBRARY_GIT_REMOTE="${LIBRARY_GIT_REMOTE:-}"
+LIBRARY_BACKUP_DEST="${LIBRARY_BACKUP_DEST:-}"
+LIBRARY_BACKUP_RSYNC_PATH="${LIBRARY_BACKUP_RSYNC_PATH:-}"
 
 # Expand a leading "~/" (or a bare "~") since parameter expansion doesn't.
 expand_tilde() {
@@ -107,6 +118,7 @@ PLISTS_DIR="$HOME/Library/LaunchAgents"
 WORKER_LABEL="${LABEL_PREFIX}.claude-source-intake"
 DASHBOARD_LABEL="${LABEL_PREFIX}.claude-source-intake-ui"
 PREPRINT_LABEL="${LABEL_PREFIX}.claude-source-intake-preprint-check"
+SYNC_LABEL="${LABEL_PREFIX}.claude-source-intake-library-sync"
 
 say() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m!!\033[0m %s\n' "$*" >&2; }
@@ -124,6 +136,7 @@ say "claude:    $CLAUDE_BIN"
 say "library:   $LIBRARY"
 say "inbox:     $INBOX"
 say "refbook:   ${REFBOOK:-<disabled>}"
+say "sync:      commit=${LIBRARY_AUTOCOMMIT} remote=${LIBRARY_GIT_REMOTE:-<none>} backup=${LIBRARY_BACKUP_DEST:-<none>}"
 say "labels:    ${LABEL_PREFIX}.*"
 say "domain:    $DOMAIN"
 [[ -n "$DASHBOARD_EXTRA_ORIGINS" ]] && say "origins:   $DASHBOARD_EXTRA_ORIGINS"
@@ -163,6 +176,7 @@ deploy_script "$REPO_ROOT/scripts/check-preprints.py" "$SCRIPTS_DIR/claude-sourc
 deploy_script "$REPO_ROOT/scripts/detect-promotion.py" "$SCRIPTS_DIR/claude-source-intake-detect-promotion.py"
 deploy_script "$REPO_ROOT/scripts/candidate-manifest.py" "$SCRIPTS_DIR/claude-source-intake-candidate-manifest.py"
 deploy_script "$REPO_ROOT/scripts/validate.py"        "$SCRIPTS_DIR/claude-source-intake-validate.py"
+deploy_script "$REPO_ROOT/scripts/library-sync.sh"    "$SCRIPTS_DIR/claude-source-intake-library-sync.sh"
 
 # Enforce 0600 on the API key file if it already exists. The README tells
 # the user to chmod 600 themselves, but it's the kind of thing that drifts;
@@ -218,6 +232,10 @@ render_plist() {
       -e "s|__DASHBOARD_EXTRA_ORIGINS__|${DASHBOARD_EXTRA_ORIGINS}|g" \
       -e "s|__DASHBOARD_PORT__|${DASHBOARD_PORT}|g" \
       -e "s|__PREPRINT_REFRESH_DAYS__|${PREPRINT_REFRESH_DAYS}|g" \
+      -e "s|__LIBRARY_AUTOCOMMIT__|${LIBRARY_AUTOCOMMIT}|g" \
+      -e "s|__LIBRARY_GIT_REMOTE__|${LIBRARY_GIT_REMOTE}|g" \
+      -e "s|__LIBRARY_BACKUP_DEST__|${LIBRARY_BACKUP_DEST}|g" \
+      -e "s|__LIBRARY_BACKUP_RSYNC_PATH__|${LIBRARY_BACKUP_RSYNC_PATH}|g" \
       "$src" > "$dest"
   plutil -lint "$dest" >/dev/null
 }
@@ -225,6 +243,7 @@ say "Rendering launchd plists..."
 render_plist "$REPO_ROOT/launchd/worker.plist.template"          "$PLISTS_DIR/$WORKER_LABEL.plist"
 render_plist "$REPO_ROOT/launchd/dashboard.plist.template"       "$PLISTS_DIR/$DASHBOARD_LABEL.plist"
 render_plist "$REPO_ROOT/launchd/preprint-check.plist.template"  "$PLISTS_DIR/$PREPRINT_LABEL.plist"
+render_plist "$REPO_ROOT/launchd/library-sync.plist.template"    "$PLISTS_DIR/$SYNC_LABEL.plist"
 
 # --- (Re)load launchd agents --------------------------------------------------
 UID_NUM="$(id -u)"
@@ -240,6 +259,7 @@ say "Loading launchd agents..."
 reload_agent "$WORKER_LABEL"
 reload_agent "$DASHBOARD_LABEL"
 reload_agent "$PREPRINT_LABEL"
+reload_agent "$SYNC_LABEL"
 
 # --- Summary ------------------------------------------------------------------
 echo

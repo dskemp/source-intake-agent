@@ -105,12 +105,14 @@ $INBOX/                                ← drop files here
   ├── claude-source-intake-ui.py
   ├── claude-source-intake-regen-index.py
   ├── claude-source-intake-check-preprints.py
-  └── claude-source-intake-detect-promotion.py
+  ├── claude-source-intake-detect-promotion.py
+  └── claude-source-intake-library-sync.sh
 
 ~/Library/LaunchAgents/
   ├── <prefix>.claude-source-intake.plist                 (WatchPaths + 5-min interval)
   ├── <prefix>.claude-source-intake-ui.plist              (dashboard server)
-  └── <prefix>.claude-source-intake-preprint-check.plist  (weekly cron)
+  ├── <prefix>.claude-source-intake-preprint-check.plist  (weekly cron)
+  └── <prefix>.claude-source-intake-library-sync.plist    (daily backstop)
 ```
 
 **Flow per file drop:**
@@ -276,6 +278,34 @@ you have a reason.
 | `PREPRINT_PROMOTION_MODE` | `auto` | How the worker handles a PDF that looks like the published version of a tracked preprint. `auto` archives the preprint and intakes the published PDF into its category slot. `stage` routes the PDF to `_promoted/_pending/` for manual review. `off` disables detection. |
 | `TRIAGE_MODEL` | `$MODEL` | Model for the stage-2 refbook triage pass. Point it at a cheaper model if triage cost matters more than verdict quality. |
 | `TRIAGE_TIMEOUT` | `600` | Wall-clock seconds before the watchdog kills a hung triage run. Single attempt, no retries — triage is non-fatal and re-runnable. |
+
+## Versioning and backing up the library
+
+The worker never needs the library to be a git repo, but if it is, it can
+keep it committed and backed up. Three opt-in settings in `.env`:
+
+```bash
+LIBRARY_AUTOCOMMIT=1                        # commit after each intake
+LIBRARY_GIT_REMOTE=nas                      # then push to this remote
+LIBRARY_BACKUP_DEST=me@nas:/backups/library # and rsync a full copy, PDFs included
+LIBRARY_BACKUP_RSYNC_PATH=/usr/bin/rsync    # Synology: required with macOS openrsync
+```
+
+After every successful intake the worker runs `library-sync.sh` with a
+message naming what it filed (`Intake: ai-alignment/zhao-2026-jagged-judges`,
+or `Promote preprint: ...`). A daily launchd job (03:45) runs the same script
+with no message, which commits anything changed outside the worker (dashboard
+deletes, hand edits) as `Library sync: N path(s) changed outside intake`.
+
+- Commits are authored as `source-intake-agent`, so `git log` separates
+  pipeline changes from hand edits.
+- The rsync copy never deletes on the destination: a source removed from the
+  library stays in the backup.
+- Every step is non-fatal. A failed push is retried on the next sync. Output
+  goes to the worker log, or to `/tmp/claude-source-intake-library-sync.*.log`
+  for the daily run.
+- SSH runs with `BatchMode=yes`, so the key must load without a prompt (a
+  key with no passphrase, or one stored with `UseKeychain yes`).
 
 ## Keeping the repo and the running system in sync
 
@@ -611,12 +641,14 @@ source-intake-agent/
 │   ├── regen-index.py
 │   ├── check-preprints.py    ← OpenAlex lookup for arXiv/SSRN promotion
 │   ├── detect-promotion.py   ← worker hook: match dropped PDF to a tracked preprint
+│   ├── library-sync.sh       ← commit, push, and back up the library (opt-in)
 │   ├── backfill-hashes.py    ← one-shot: add source_hash to existing summaries
 │   └── migrate-institutional-authors.py  ← one-shot: normalize org-authored summaries
 ├── launchd/
 │   ├── worker.plist.template
 │   ├── dashboard.plist.template
-│   └── preprint-check.plist.template      (weekly cron, Mon 03:15)
+│   ├── preprint-check.plist.template      (weekly cron, Mon 03:15)
+│   └── library-sync.plist.template        (daily backstop, 03:45)
 └── config/
     └── prompt.txt               ← default autonomy prompt; __LIBRARY__ token
                                     is substituted on first install
