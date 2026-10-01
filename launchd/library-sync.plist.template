@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>__LABEL_PREFIX__.claude-source-intake-library-sync</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>__HOME__/Library/Scripts/claude-source-intake-library-sync.sh</string>
+    </array>
+    <!-- Daily at 03:45: the backstop for library changes made outside the
+         worker (the worker syncs after every intake itself). If the Mac is
+         asleep at the scheduled time, launchd runs it on wake. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>3</integer>
+        <key>Minute</key>
+        <integer>45</integer>
+    </dict>
+    <key>RunAtLoad</key>
+    <false/>
+    <key>StandardOutPath</key>
+    <string>/tmp/claude-source-intake-library-sync.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/claude-source-intake-library-sync.err.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>__HOME__</string>
+        <key>LIBRARY_PATH</key>
+        <string>__LIBRARY__</string>
+        <key>LIBRARY_AUTOCOMMIT</key>
+        <string>__LIBRARY_AUTOCOMMIT__</string>
+        <key>LIBRARY_GIT_REMOTE</key>
+        <string>__LIBRARY_GIT_REMOTE__</string>
+        <key>LIBRARY_BACKUP_DEST</key>
+        <string>__LIBRARY_BACKUP_DEST__</string>
+        <key>LIBRARY_BACKUP_RSYNC_PATH</key>
+        <string>__LIBRARY_BACKUP_RSYNC_PATH__</string>
+    </dict>
+</dict>
+</plist>

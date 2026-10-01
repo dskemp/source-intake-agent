@@ -46,6 +46,14 @@
         <string>__CATEGORY_ORDER__</string>
         <key>DOMAIN</key>
         <string>__DOMAIN__</string>
+        <key>LIBRARY_AUTOCOMMIT</key>
+        <string>__LIBRARY_AUTOCOMMIT__</string>
+        <key>LIBRARY_GIT_REMOTE</key>
+        <string>__LIBRARY_GIT_REMOTE__</string>
+        <key>LIBRARY_BACKUP_DEST</key>
+        <string>__LIBRARY_BACKUP_DEST__</string>
+        <key>LIBRARY_BACKUP_RSYNC_PATH</key>
+        <string>__LIBRARY_BACKUP_RSYNC_PATH__</string>
     </dict>
 </dict>
 </plist>
