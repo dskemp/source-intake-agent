@@ -307,6 +307,15 @@ deletes, hand edits) as `Library sync: N path(s) changed outside intake`.
 - SSH runs with `BatchMode=yes`, so the key must load without a prompt (a
   key with no passphrase, or one stored with `UseKeychain yes`).
 
+**Retirement triage.** When `REFBOOK` is set, each sync also runs
+`retirement-triage.py`. For every source whose `status` is superseded,
+retracted or withdrawn (or that has a legacy `superseded_by`) and has no
+report yet, it writes `$REFBOOK/triage/<category>--<slug>.retirement.md`.
+That report lists where the book cites the source, taken from `REFERENCES.md`
+and from the sections' `sources_used`. It's deterministic, and like stage-2
+triage it only adds report files; an existing report, and the decision
+recorded in it, is never rewritten.
+
 ## Currency console
 
 `/currency` on the dashboard collects everything in the wider pipeline
@@ -706,6 +715,7 @@ source-intake-agent/
 │   ├── detect-promotion.py   ← worker hook: match dropped PDF to a tracked preprint
 │   ├── library-sync.sh       ← commit, push, and back up the library (opt-in)
 │   ├── currency.py           ← currency console data + weekly notification
+│   ├── retirement-triage.py  ← proposes a book review when a cited source is retired
 │   ├── backfill-hashes.py    ← one-shot: add source_hash to existing summaries
 │   └── migrate-institutional-authors.py  ← one-shot: normalize org-authored summaries
 ├── launchd/

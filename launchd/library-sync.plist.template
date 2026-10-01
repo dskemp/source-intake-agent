@@ -40,6 +40,8 @@
         <string>__LIBRARY_BACKUP_DEST__</string>
         <key>LIBRARY_BACKUP_RSYNC_PATH</key>
         <string>__LIBRARY_BACKUP_RSYNC_PATH__</string>
+        <key>REFBOOK_PATH</key>
+        <string>__REFBOOK__</string>
     </dict>
 </dict>
 </plist>
