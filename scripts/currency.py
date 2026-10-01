@@ -453,7 +453,11 @@ def notify(data: dict) -> None:
     else:
         msg = f"{len(need)} item(s) need you" + (f", {len(bad)} urgent" if bad else "") + \
               f" — open {CONSOLE_URL}"
-    script = f'display notification {json.dumps(msg)} with title {json.dumps(title)}'
+    def applescript_str(text: str) -> str:
+        # AppleScript string literal: only backslash and double quote need
+        # escaping; non-ASCII (the em dash) is fine as-is, unlike \u escapes.
+        return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    script = f"display notification {applescript_str(msg)} with title {applescript_str(title)}"
     subprocess.run(["osascript", "-e", script], check=False)
 
 
