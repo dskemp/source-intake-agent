@@ -14,8 +14,9 @@
 # Safety: only triage/*.md (never README.md, never anything outside triage/),
 # via `git commit --only`, so nothing else staged or modified in the checkout is
 # touched. It commits only when the checkout is on `main` and no merge, rebase,
-# cherry-pick or revert is in progress. It never pushes: the commits travel with
-# the user's next push or PR. Non-fatal: it prints what it skipped and exits 0.
+# cherry-pick or revert is in progress. It then pushes the commits, but only
+# if every unpushed commit is report-only, and never forced (see the end of this
+# file). Non-fatal: it prints what it skipped and exits 0.
 set -uo pipefail
 
 REFBOOK="${REFBOOK_PATH:-}"
@@ -67,5 +68,42 @@ if (( ${#changed[@]} )); then
   else
     say "WARNING: commit of report edits failed"
   fi
+fi
+
+# Push report-only commits so the checkout doesn't diverge from the remote
+# every time a PR merges there. Reports are proposals, not book content, so
+# they go straight to main, but only when EVERY unpushed commit touches
+# triage/*.md and nothing else. Never forced. If the remote has moved on, the
+# report-only commits are rebased first, and only on a clean working tree.
+# TRIAGE_PUSH=0 turns this off.
+[[ "${TRIAGE_PUSH:-1}" == "1" ]] || exit 0
+upstream=$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null) || exit 0
+remote=${upstream%%/*}
+GIT_SSH_COMMAND="ssh -o BatchMode=yes -o ConnectTimeout=15" git fetch -q "$remote" 2>/dev/null \
+  || { say "fetch from $remote failed; not pushing"; exit 0; }
+ahead=$(git rev-list "$upstream..HEAD")
+[[ -n "$ahead" ]] || exit 0
+for c in $ahead; do
+  if git diff-tree --no-commit-id --name-only -r "$c" | grep -qv '^triage/.*\.md$'; then
+    say "unpushed commit $(git rev-parse --short "$c") touches files outside triage/; leaving it for the user to push"
+    exit 0
+  fi
+done
+if [[ -n "$(git rev-list "HEAD..$upstream")" ]]; then
+  if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
+    say "$upstream has moved on and the working tree has changes; not rebasing (run: git pull --rebase)"
+    exit 0
+  fi
+  if ! git rebase -q "$upstream" 2>/dev/null; then
+    git rebase --abort 2>/dev/null
+    say "rebase of report commits onto $upstream failed; aborted, nothing pushed"
+    exit 0
+  fi
+  say "rebased $(git rev-list --count "$upstream..HEAD") report commit(s) onto $upstream"
+fi
+if GIT_SSH_COMMAND="ssh -o BatchMode=yes -o ConnectTimeout=15" git push -q "$remote" "HEAD:${upstream#*/}" 2>/dev/null; then
+  say "pushed $(echo "$ahead" | wc -l | tr -d ' ') report commit(s) to $upstream"
+else
+  say "push to $upstream failed; will retry on the next sync"
 fi
 exit 0

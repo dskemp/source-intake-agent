@@ -325,7 +325,15 @@ commits pending `triage/*.md` files in the refbook checkout:
 
 It uses `git commit --only` on those paths, so nothing else in the checkout
 is touched. It acts only when the checkout is on `main` with no merge or rebase
-in progress, and it never pushes.
+in progress.
+
+It then pushes those commits to the upstream branch, so the checkout doesn't
+diverge every time a PR merges on the remote. The push happens only when
+*every* unpushed commit touches `triage/*.md` and nothing else, and it is never
+forced. If the remote has moved on, the report-only commits are rebased first,
+and only on a clean working tree; otherwise it skips the push and says why.
+Reports are proposals, not book content, so they don't go through a PR. Set
+`TRIAGE_PUSH=0` in `~/.config/claude-source-intake/env` to keep them local.
 
 ## Currency console
 

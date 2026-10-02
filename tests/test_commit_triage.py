@@ -77,6 +77,85 @@ def test_skips_off_main():
               and sh(repo, "git", "rev-list", "--count", "HEAD").strip() == "1")
 
 
+def with_remote(d):
+    """A checkout on main tracking a bare 'origin', plus a second clone to move the remote."""
+    root = Path(d)
+    sh(root, "git", "init", "-q", "--bare", "-b", "main", "origin.git")
+    repo = root / "book"
+    repo.mkdir()
+    (repo / "triage").mkdir()
+    (repo / "docs").mkdir()
+    sh(repo, "git", "init", "-q", "-b", "main")
+    sh(repo, "git", "config", "user.name", "Owner")
+    sh(repo, "git", "config", "user.email", "owner@example.com")
+    (repo / "docs" / "a.md").write_text("a\n")
+    sh(repo, "git", "add", "-A")
+    sh(repo, "git", "commit", "-qm", "init")
+    sh(repo, "git", "remote", "add", "origin", str(root / "origin.git"))
+    sh(repo, "git", "push", "-q", "-u", "origin", "main")
+    return root, repo
+
+
+def move_remote(root, name="docs/b.md"):
+    other = root / "other"
+    sh(root, "git", "clone", "-q", str(root / "origin.git"), str(other))
+    sh(other, "git", "config", "user.name", "Other")
+    sh(other, "git", "config", "user.email", "o@example.com")
+    (other / name).parent.mkdir(exist_ok=True)
+    (other / name).write_text("merged on the remote\n")
+    sh(other, "git", "add", "-A")
+    sh(other, "git", "commit", "-qm", "remote change")
+    sh(other, "git", "push", "-q", "origin", "main")
+
+
+def remote_head(root):
+    return sh(root, "git", "--git-dir", str(root / "origin.git"), "rev-parse", "main").strip()
+
+
+def test_pushes_report_only_commits():
+    with tempfile.TemporaryDirectory() as d:
+        root, repo = with_remote(d)
+        (repo / "triage" / "r.md").write_text("---\nstatus: proposed\n---\n")
+        out = run(repo)
+        check("report-only commit pushed", "pushed 1 report commit" in out
+              and remote_head(root) == sh(repo, "git", "rev-parse", "HEAD").strip())
+
+
+def test_rebases_then_pushes_when_remote_moved():
+    with tempfile.TemporaryDirectory() as d:
+        root, repo = with_remote(d)
+        move_remote(root)
+        (repo / "triage" / "r.md").write_text("x\n")
+        out = run(repo)
+        head = sh(repo, "git", "rev-parse", "HEAD").strip()
+        check("rebased onto the moved remote", "rebased 1 report commit" in out)
+        check("pushed after rebase", remote_head(root) == head)
+        check("history stays linear", sh(repo, "git", "rev-list", "--merges", "--count", "HEAD").strip() == "0")
+
+
+def test_no_push_when_unpushed_commit_is_not_report_only():
+    with tempfile.TemporaryDirectory() as d:
+        root, repo = with_remote(d)
+        (repo / "docs" / "a.md").write_text("local edit\n")
+        sh(repo, "git", "commit", "-qam", "user's own work")
+        before = remote_head(root)
+        (repo / "triage" / "r.md").write_text("x\n")
+        out = run(repo)
+        check("non-report commit blocks the push", "outside triage/" in out and remote_head(root) == before)
+
+
+def test_no_rebase_with_dirty_tree():
+    with tempfile.TemporaryDirectory() as d:
+        root, repo = with_remote(d)
+        move_remote(root)
+        (repo / "docs" / "a.md").write_text("uncommitted\n")
+        before = remote_head(root)
+        (repo / "triage" / "r.md").write_text("x\n")
+        out = run(repo)
+        check("dirty tree: no rebase, no push", "not rebasing" in out and remote_head(root) == before)
+        check("dirty tree: user's change untouched", (repo / "docs" / "a.md").read_text() == "uncommitted\n")
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     print(f"running {len(fns)} test groups for commit-triage.sh")
