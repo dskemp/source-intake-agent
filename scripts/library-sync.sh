@@ -79,7 +79,7 @@ until mkdir "$LOCKDIR" 2>/dev/null; do
   sleep 5
   waited=$((waited + 5))
 done
-ERRFILE=$(mktemp -t library-sync)
+ERRFILE=$(mktemp "${TMPDIR:-/tmp}/library-sync.XXXXXX")
 trap 'rmdir "$LOCKDIR" 2>/dev/null; rm -f "$ERRFILE"' EXIT
 
 status=0
