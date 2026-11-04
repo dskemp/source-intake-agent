@@ -19,6 +19,7 @@ exception. Sources (all optional except LIBRARY_PATH):
   DIGEST_REPO_PATH     digest repo (last judge recalibration)
   DIGEST_URL           digest dashboard; its public /api/library-flagged
   ~/.config/digest-backup/status.json   written by the digest's NAS backup job
+  ~/.config/claude-source-intake/library-sync-status.json   written by library-sync.sh
 
 Usage: currency.py [--json] [--notify]
 """
@@ -51,6 +52,8 @@ DIGEST_REPO = _path("DIGEST_REPO_PATH", str(HOME / "Developer/digest"))
 DIGEST_URL = os.environ.get("DIGEST_URL", "https://digest.davidkemp.ai").rstrip("/")
 DIGEST_BACKUP_STATUS = HOME / ".config/digest-backup/status.json"
 LIBRARY_SYNC_LOG = Path("/tmp/claude-source-intake-library-sync.out.log")
+LIBRARY_SYNC_STATUS = Path(os.environ.get(
+    "LIBRARY_SYNC_STATUS", str(HOME / ".config/claude-source-intake/library-sync-status.json")))
 SYNTHESIS = "sources/prompt-engineering-best-practices-2026.md"
 # Where the operator opens the dashboard: the first DASHBOARD_EXTRA_ORIGINS
 # entry (a reverse-proxy name such as https://library.example.localhost) when
@@ -207,8 +210,42 @@ def gather_backups(health: dict) -> dict:
     if LIBRARY_SYNC_LOG.exists():
         lines = [l for l in LIBRARY_SYNC_LOG.read_text(errors="replace").splitlines() if l.strip()]
         last_sync_line = lines[-1] if lines else ""
+    sync = {}
+    if LIBRARY_SYNC_STATUS.exists():
+        try:
+            sync = json.loads(LIBRARY_SYNC_STATUS.read_text())
+        except (ValueError, OSError) as e:
+            sync = {"outcome": "unreadable", "detail": str(e)}
+    sync_age_h = None
+    if sync.get("last_success"):
+        try:
+            last = datetime.fromisoformat(sync["last_success"].replace("Z", "+00:00"))
+            sync_age_h = round((datetime.now(timezone.utc) - last).total_seconds() / 3600, 1)
+        except ValueError:
+            pass
+    # No status file yet means the sync predates status reporting: judge by git alone.
+    sync_bad = bool(sync) and (sync.get("outcome") != "ok" or sync_age_h is None
+                               or sync_age_h > BACKUP_STALE_HOURS)
     return {"digest": digest, "library": {**lib, "last_daily_sync": last_sync_line,
-            "stale": bool(lib.get("uncommitted_paths") or lib.get("unpushed_commits"))}}
+            "sync": sync, "sync_age_hours": sync_age_h,
+            "stale": bool(lib.get("uncommitted_paths") or lib.get("unpushed_commits") or sync_bad)}}
+
+
+def _sync_items(lb: dict) -> list[str]:
+    s = lb.get("sync") or {}
+    if not s:
+        return ["last sync outcome: not recorded yet"]
+    items = [f"last sync {s.get('last_run')}: {s.get('outcome')}"
+             + (f" ({s.get('failed_steps')}: {s.get('detail')})" if s.get("outcome") != "ok" else "")]
+    if s.get("consecutive_failures"):
+        items.append(f"failed {s['consecutive_failures']} run(s) in a row; last success "
+                     f"{s.get('last_success') or 'never'}")
+    elif lb.get("sync_age_hours") is not None:
+        items.append(f"last success {lb['sync_age_hours']}h ago")
+    if s.get("mirror_deleted"):
+        items.append(f"last run removed {s['mirror_deleted']} file(s) from the mirror; "
+                     f"kept in {s.get('history_dir')}")
+    return items
 
 
 def gather_rhythm(health: dict, digest: dict) -> list[dict]:
@@ -272,12 +309,15 @@ def build_cards(data: dict) -> list[dict]:
                     f"file {dg.get('file')} ({(dg.get('bytes') or 0) // 1_000_000} MB)"],
              commands=["tail -20 /tmp/digest-backup.out.log /tmp/digest-backup.err.log"])
     card("backup-library", "Library committed and on the NAS", "bad" if lb.get("stale") else "ok",
-         (lb.get("uncommitted_paths") or 0) + (lb.get("unpushed_commits") or 0),
-         "Intake commits and pushes after every run; this catches anything it missed.",
-         "If non-zero, run the sync now.",
+         ((lb.get("uncommitted_paths") or 0) + (lb.get("unpushed_commits") or 0))
+         or ("sync failed" if lb.get("stale") else 0),
+         "Intake commits, pushes and mirrors (PDFs included) after every run; the daily sync catches anything it missed.",
+         "If flagged, run the sync now and read the log.",
          items=[f"uncommitted paths: {lb.get('uncommitted_paths')}",
                 f"unpushed commits: {lb.get('unpushed_commits')} (upstream {lb.get('upstream')})",
-                f"last daily sync: {lb.get('last_daily_sync') or 'none logged yet'}"])
+                *_sync_items(lb),
+                f"last daily sync: {lb.get('last_daily_sync') or 'none logged yet'}"],
+         commands=["tail -30 /tmp/claude-source-intake-library-sync.out.log /tmp/claude-source-intake-library-sync.err.log"])
 
     # Digest → library
     if "error" in d:
