@@ -91,6 +91,46 @@ def test_failures_become_cards():
     check("missing backup is urgent", cards["backup-digest"]["severity"] == "bad")
 
 
+def test_library_sync_status():
+    import json
+    import tempfile
+    from datetime import datetime, timedelta, timezone
+    git_ok = {"library_git": {"uncommitted_paths": 0, "unpushed_commits": 0}}
+    iso = lambda dt: dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    now = datetime.now(timezone.utc)
+    with tempfile.TemporaryDirectory() as d:
+        c.LIBRARY_SYNC_LOG = Path(d) / "absent.log"
+        c.LIBRARY_SYNC_STATUS = Path(d) / "status.json"
+        lib = c.gather_backups(git_ok)["library"]
+        check("no status file yet: judged by git alone", lib["stale"] is False)
+
+        c.LIBRARY_SYNC_STATUS.write_text(json.dumps({
+            "last_run": iso(now), "outcome": "failed", "failed_steps": "backup",
+            "detail": "backup: Connection timed out", "last_success": iso(now - timedelta(hours=50)),
+            "consecutive_failures": 3, "mirror_deleted": 0, "history_dir": ""}))
+        lib = c.gather_backups(git_ok)["library"]
+        check("failed sync marks the library card stale", lib["stale"] is True)
+        card = cards_for(backups={**BACKUPS, "library": lib})["backup-library"]
+        check("failed sync card is urgent", card["severity"] == "bad" and card["count"] == "sync failed")
+        check("card shows the error", any("Connection timed out" in e for e in card["entries"]))
+        check("card shows the failure streak", any("3 run(s) in a row" in e for e in card["entries"]))
+
+        c.LIBRARY_SYNC_STATUS.write_text(json.dumps({
+            "last_run": iso(now), "outcome": "ok", "failed_steps": "", "detail": "",
+            "last_success": iso(now), "consecutive_failures": 0, "mirror_deleted": 2,
+            "history_dir": "library-history/20261104T000000Z"}))
+        lib = c.gather_backups(git_ok)["library"]
+        card = cards_for(backups={**BACKUPS, "library": lib})["backup-library"]
+        check("fresh ok sync is fine", lib["stale"] is False and card["severity"] == "ok")
+        check("card reports mirror deletions",
+              any("removed 2 file(s)" in e and "library-history/" in e for e in card["entries"]))
+
+        c.LIBRARY_SYNC_STATUS.write_text(json.dumps({
+            "last_run": iso(now - timedelta(hours=40)), "outcome": "ok",
+            "last_success": iso(now - timedelta(hours=40)), "consecutive_failures": 0}))
+        check("ok but over 36h old is stale", c.gather_backups(git_ok)["library"]["stale"] is True)
+
+
 def test_summary_text():
     data = {"generated": "now", "cards": c.build_cards({"health": HEALTH, "digest": DIGEST,
                                                          "gate_c": GATE, "backups": BACKUPS}),

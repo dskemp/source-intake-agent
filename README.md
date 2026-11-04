@@ -299,11 +299,30 @@ deletes, hand edits) as `Library sync: N path(s) changed outside intake`.
 
 - Commits are authored as `source-intake-agent`, so `git log` separates
   pipeline changes from hand edits.
-- The rsync copy never deletes on the destination: a source removed from the
-  library stays in the backup.
+- The rsync copy is a mirror: a file removed from the library is removed from
+  the backup too, but it isn't destroyed. Each run moves every file it deletes
+  or overwrites into `<dest>-history/<UTC timestamp>/` beside the mirror
+  (`backups/library-history/...` for the example above). That folder is never
+  pruned.
+- If a run would delete more than `LIBRARY_BACKUP_MAX_DELETE` files (default
+  25), it still copies new and changed files but deletes nothing, and counts
+  as a failure. That stops an emptied or half-mounted library from emptying
+  the mirror. If the deletions are intended, run the script once by hand
+  with the daily job's variables (the `EnvironmentVariables` in its plist)
+  and `LIBRARY_BACKUP_MAX_DELETE` raised.
+- Deletions need rsync 3.x on the receiving side (Synology has it). macOS's
+  openrsync skips deletions when `--backup` is set, so a local destination
+  only ever gains files.
 - Every step is non-fatal. A failed push is retried on the next sync. Output
   goes to the worker log, or to `/tmp/claude-source-intake-library-sync.*.log`
   for the daily run.
+- Each run writes its outcome to
+  `~/.config/claude-source-intake/library-sync-status.json`: failed steps, the
+  error line, the last success, the number of failures in a row, and what the
+  mirror lost. A failed run posts a macOS notification ("Library backup
+  failed"); set `LIBRARY_SYNC_NOTIFY=0` to turn that off. The currency
+  console's library backup card turns red on a failed run, or when the last
+  success is over 36 hours old.
 - SSH runs with `BatchMode=yes`, so the key must load without a prompt (a
   key with no passphrase, or one stored with `UseKeychain yes`).
 
@@ -365,6 +384,7 @@ Data comes from `scripts/currency.py` (deployed beside the dashboard):
 | `REFBOOK_PATH` | the refbook's `scripts/pipeline-health.py`, plus `detect-state.py` for Gate C |
 | the digest's public `/api/library-flagged` | open flags and labels |
 | `~/.config/digest-backup/status.json` | the outcome of the digest backup job |
+| `~/.config/claude-source-intake/library-sync-status.json` | the outcome of the last library sync (commit, push, mirror) |
 | `LIBRARY_AUDIT_PATH` and `DIGEST_REPO_PATH` | last-done dates, defaulting to `~/Cowork/active/library-audit` and `~/Developer/digest` |
 
 A missing source becomes a card that says so, never an error page. Results
